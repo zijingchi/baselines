@@ -34,6 +34,7 @@ class MlpPolicy(object):
             self.ob_rms = RunningMeanStd(shape=ob_space.shape)
 
         obz = tf.clip_by_value((ob - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)
+
         last_out = obz
         for i in range(num_hid_layers):
             last_out = tf.nn.tanh(dense(last_out, hid_size, "vffc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
@@ -63,6 +64,94 @@ class MlpPolicy(object):
 
     def act(self, stochastic, ob):
         ac1, vpred1 = self._act(stochastic, ob[None])
+        return ac1[0], vpred1[0]
+
+    def get_variables(self):
+        return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, self.scope)
+
+    def get_trainable_variables(self):
+        return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
+
+    def get_initial_state(self):
+        return []
+
+
+class MlpPolicy4Dict(object):
+    recurrent = False
+
+    def __init__(self, name, reuse=False, *args, **kwargs):
+        with tf.variable_scope(name):
+            if reuse:
+                tf.get_variable_scope().reuse_variables()
+            self._init(*args, **kwargs)
+            self.scope = tf.get_variable_scope().name
+
+    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, gaussian_fixed_var=True):
+        assert isinstance(ob_space, gym.spaces.Dict)
+
+        self.pdtype = pdtype = make_pdtype(ac_space)
+        sequence_length = None
+
+        ob_config = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.spaces['joint'].shape))
+        ob_target = U.get_placeholder(name="goal", dtype=tf.float32, shape=[sequence_length] + list(ob_space.spaces['target'].shape))
+        obs_pos = U.get_placeholder(name="obs_pos", dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos'].shape))
+        obs_ori = U.get_placeholder(name="obs_ori", dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_ori'].shape))
+        # construct v function model
+        '''with tf.variable_scope("obfilter"):
+            self.ob_rms = RunningMeanStd(shape=ob_space['joint'].shape)
+
+        obz = tf.clip_by_value((ob_config - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)
+        last_out = obz
+        goal_last_out = tf.clip_by_value((ob_target - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)'''
+        last_out = ob_config
+        goal_last_out = ob_target
+        op_last_out = tf.layers.batch_normalization(obs_pos, True, name="obs_pos_bn")
+        oo_last_out = tf.layers.batch_normalization(obs_ori, True, name="obs_ori_bn")
+        op_last_out = tf.nn.tanh(dense(op_last_out, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0)))
+        oo_last_out = tf.nn.tanh(dense(oo_last_out, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0)))
+        obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
+        for i in range(num_hid_layers):
+            last_out = tf.nn.tanh(dense(last_out, hid_size, "vfcfc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
+            goal_last_out = tf.nn.tanh(dense(goal_last_out, hid_size, "vfgfc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+            obs_last_out = tf.nn.tanh(dense(obs_last_out, hid_size, "vfobsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+        vpred = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        self.vpred = dense(vpred, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:, 0]
+
+        # construct policy probability distribution model
+        last_out = ob_config
+        goal_last_out = ob_target
+        obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
+
+        for i in range(num_hid_layers):
+            last_out = tf.nn.tanh(dense(last_out, hid_size, "pol_cfg_fc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
+            goal_last_out = tf.nn.tanh(
+                dense(goal_last_out, hid_size, "pol_g_fc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+            obs_last_out = tf.nn.tanh(
+                dense(obs_last_out, hid_size, "pol_obs_fc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+        last_out = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
+            mean = dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer())
+            pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+        else:
+            pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+
+        self.pd = pdtype.pdfromflat(pdparam)
+
+        self.state_in = []
+        self.state_out = []
+
+        # change for BC
+        stochastic = U.get_placeholder(name="stochastic", dtype=tf.bool, shape=())
+        ac = U.switch(stochastic, self.pd.sample(), self.pd.mode())
+        self.ac = ac
+        self._act = U.function([stochastic, ob_config, ob_target, obs_pos, obs_ori], [ac, self.vpred])
+
+    def act(self, stochastic, ob):
+        ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None],
+                                ob['obstacle_pos'][None], ob['obstacle_ori'][None])
         return ac1[0], vpred1[0]
 
     def get_variables(self):
