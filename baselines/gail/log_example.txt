@@ -1,0 +1,85 @@
+generator_loss |   expert_loss |       entropy |  entropy_loss | generator_acc |    expert_acc
+      0.58462 |       0.56811 |       0.65477 |      -0.00065 |       0.71387 |       0.79980
+---------------------------------
+| entloss         | 0.0         |
+| entropy         | 8.564696    |
+| EpisodesSoFar   | 16          |
+| EpLenMean       | 1e+03       |
+| EpRewMean       | 672.82983   |
+| EpThisIter      | 1           |
+| EpTrueRewMean   | -738        |
+| ev_tdlam_before | 0.00942     |
+| meankl          | 0.005421564 |
+| optimgain       | 0.06379882  |
+| surrgain        | 0.06379882  |
+| TimeElapsed     | 47.1        |
+| TimestepsSoFar  | 16000       |
+---------------------------------
+
+	iter residual norm  soln norm
+         0      0.246          0
+         1     0.0829      0.183
+         2     0.0601      0.313
+         3     0.0851      0.504
+         4     0.0752      0.793
+         5       0.05       1.07
+         6     0.0233       1.26
+         7    0.00868       1.32
+         8    0.00397       1.36
+         9    0.00208       1.37
+        10    0.00114       1.38
+
+____________________________________________________________
+first iteration:
+Optimizing Discriminator...
+generator_loss |   expert_loss |       entropy |  entropy_loss | generator_acc |    expert_acc
+      0.65285 |       0.72401 |       0.69240 |      -0.00069 |       1.00000 |       0.00977
+---------------------------------
+| entloss         | -0.02459412 |
+| entropy         | -24.59412   |
+| EpisodesSoFar   | 33          |
+| EpLenMean       | 15.1        |
+| EpRewMean       | 9.860477    |
+| EpThisIter      | 33          |
+| EpTrueRewMean   | -0.1        |
+| ev_tdlam_before | 0.419       |
+| meankl          | 0.053599    |
+| optimgain       | 0.16313258  |
+| surrgain        | 0.1877267   |
+| TimeElapsed     | 194         |
+| TimestepsSoFar  | 498         |
+---------------------------------
+
+run_vrep_test after 115 iterations:
+cg
+      iter residual norm  soln norm
+         0   3.53e+04          0
+         1   4.03e+04   0.000208
+         2    1.2e+04   0.000303
+         3   1.75e+05    0.00167
+         4   1.04e+04    0.00238
+         5   2.66e+04    0.00274
+         6   2.04e+04     0.0029
+         7   7.23e+03     0.0036
+         8   4.16e+04    0.00384
+         9   1.02e+04     0.0044
+        10   4.49e+03    0.00478
+
+Optimizing Discriminator...
+generator_loss |   expert_loss |       entropy |  entropy_loss | generator_acc |    expert_acc
+      0.29580 |       0.19745 |       0.27612 |      -0.00028 |       0.90234 |       0.94336
+----------------------------------
+| entloss         | -0.024593962 |
+| entropy         | -24.593962   |
+| EpisodesSoFar   | 5495         |
+| EpLenMean       | 19.9         |
+| EpRewMean       | 4.930435     |
+| EpThisIter      | 32           |
+| EpTrueRewMean   | -0.358       |
+| ev_tdlam_before | 0.734        |
+| meankl          | 0.05105607   |
+| optimgain       | 0.17797975   |
+| surrgain        | 0.20257372   |
+| TimeElapsed     | 4.5e+04      |
+| TimestepsSoFar  | 58277        |
+----------------------------------

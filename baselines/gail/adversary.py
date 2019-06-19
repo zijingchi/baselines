@@ -158,7 +158,7 @@ class TransitionClassifier4Dict(object):
             '''with tf.variable_scope("obfilter"):
                 self.obs_rms = RunningMeanStd(shape=self.observation_shape)
             obs = (obs_ph - self.obs_rms.mean) / self.obs_rms.std'''
-            obs_config = obs_pos_ph
+            obs_config = obs_ph
             obs_goal = goal_ph
             op_last_out = tf.layers.batch_normalization(obs_pos_ph, True)
             oo_last_out = tf.layers.batch_normalization(obs_ori_ph, True)

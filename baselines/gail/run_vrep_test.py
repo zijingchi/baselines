@@ -16,13 +16,12 @@ from baselines.common import set_global_seeds, tf_util as U
 from baselines.common.misc_util import boolean_flag
 from baselines import bench
 from baselines import logger
-# from baselines.gail.dataset.mujoco_dset import Mujoco_Dset
 from baselines.gail.adversary import TransitionClassifier4Dict
 
 
 def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of GAIL")
-    parser.add_argument('--env_id', help='environment ID', default='HalfCheetah-v2')
+    parser.add_argument('--env_id', help='environment ID', default='VREP-UR')
     parser.add_argument('--seed', help='RNG seed', type=int, default=0)
     parser.add_argument('--expert_path', type=str, default='/home/ubuntu/vdp/5_2/')
     parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
@@ -31,27 +30,27 @@ def argsparser():
     # Task
     parser.add_argument('--task', type=str, choices=['train', 'evaluate', 'sample'], default='train')
     # for evaluatation
-    boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
+    boolean_flag(parser, 'stochastic_policy', default=True, help='use stochastic/deterministic policy to evaluate')
     boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
     #  Mujoco Dataset Configuration
-    parser.add_argument('--traj_limitation', type=int, default=1e4)
+    parser.add_argument('--traj_limitation', type=int, default=-1)
     # Optimization Configuration
     parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
-    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=1)
+    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
     # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=100)
+    parser.add_argument('--policy_hidden_size', type=int, default=200)
     parser.add_argument('--adversary_hidden_size', type=int, default=100)
     # Algorithms Configuration
     parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
     parser.add_argument('--max_kl', type=float, default=0.01)
-    parser.add_argument('--policy_entcoeff', help='entropy coefficiency of policy', type=float, default=0)
+    parser.add_argument('--policy_entcoeff', help='entropy coefficiency of policy', type=float, default=1e-3)
     parser.add_argument('--adversary_entcoeff', help='entropy coefficiency of discriminator', type=float, default=1e-3)
     # Traing Configuration
     parser.add_argument('--save_per_iter', help='save model every xx iterations', type=int, default=100)
-    parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=5e6)
+    parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=2e5)
     # Behavior Cloning
-    boolean_flag(parser, 'pretrained', default=False, help='Use BC to pretrain')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=1e4)
+    boolean_flag(parser, 'pretrained', default=True, help='Use BC to pretrain')
+    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=8e3)
     return parser.parse_args()
 
 
@@ -72,7 +71,7 @@ def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
     env = UR5VrepEnv(obs_space_type='dict')
-
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=150)
     def policy_fn(name, ob_space, ac_space, reuse=False):
         return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
                                     reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
@@ -109,8 +108,8 @@ def main(args):
         runner(env,
                policy_fn,
                args.load_model_path,
-               timesteps_per_batch=1024,
-               number_trajs=10,
+               timesteps_per_batch=100,
+               number_trajs=30,
                stochastic_policy=args.stochastic_policy,
                save=args.save_sample
                )
@@ -126,10 +125,11 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
     pretrained_weight = None
     if pretrained and (BC_max_iter > 0):
         # Pretrain with behavior cloning
-        from baselines.gail import behavior_clone
-        pretrained_weight = behavior_clone.learn(env, policy_fn, dataset,
-                                                 max_iters=BC_max_iter)
-
+        from baselines.gail import behavior_clone_vrep
+        pretrained_weight = behavior_clone_vrep.learn(env, policy_fn, dataset,
+                                                      max_iters=BC_max_iter, ckpt_dir='checkpoint/BC', verbose=True)
+    #path = 'trpo_gail.with_pretrained.transition_limitation_-1.HalfCheetah.g_step_3.d_step_2.policy_entcoeff_0.001.adversary_entcoeff_0.001.seed_0'
+    #pretrained_weight = "checkpoint/" + path
     if algo == 'trpo':
         from baselines.gail import trpo_mpi4vrep
         # Set up for MPI seed
@@ -140,17 +140,17 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
         set_global_seeds(workerseed)
         env.seed(workerseed)
         trpo_mpi4vrep.learn(env, policy_fn, reward_giver, dataset, rank,
-                       pretrained=pretrained, pretrained_weight=pretrained_weight,
-                       g_step=g_step, d_step=d_step,
-                       entcoeff=policy_entcoeff,
-                       max_timesteps=num_timesteps,
-                       ckpt_dir=checkpoint_dir, log_dir=log_dir,
-                       save_per_iter=save_per_iter,
-                       timesteps_per_batch=1024,
-                       max_kl=0.01, cg_iters=10, cg_damping=0.1,
-                       gamma=0.995, lam=0.97,
-                       vf_iters=5, vf_stepsize=1e-3,
-                       task_name=task_name)
+                            pretrained=pretrained, pretrained_weight=pretrained_weight,
+                            g_step=g_step, d_step=d_step,
+                            entcoeff=policy_entcoeff,
+                            max_timesteps=num_timesteps,
+                            ckpt_dir=checkpoint_dir, log_dir=log_dir,
+                            save_per_iter=save_per_iter,
+                            timesteps_per_batch=512,
+                            max_kl=0.1, cg_iters=100, cg_damping=0.1,
+                            gamma=0.995, lam=0.97,
+                            vf_iters=5, vf_stepsize=1e-3,
+                            task_name=task_name)
     else:
         raise NotImplementedError
 

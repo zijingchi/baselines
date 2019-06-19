@@ -54,6 +54,7 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
     while True:
         prevac = ac
         ac, vpred = pi.act(stochastic, ob)
+        # print("ac: ", ac)
         # Slight weirdness here because we need value function at time T
         # before returning segment [0, T-1] so we get the correct
         # terminal value
@@ -113,7 +114,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
           ckpt_dir, log_dir, timesteps_per_batch, task_name,
           gamma, lam,
           max_kl, cg_iters, cg_damping=1e-2,
-          vf_stepsize=3e-4, d_stepsize=3e-4, vf_iters=3,
+          vf_stepsize=1e-4, d_stepsize=1e-4, vf_iters=3,
           max_timesteps=0, max_episodes=0, max_iters=0,
           callback=None
           ):
@@ -125,7 +126,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     # ----------------------------------------
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_func("pi", ob_space, ac_space, reuse=(pretrained_weight != None))
+    pi = policy_func("pi", ob_space, ac_space, reuse=(pretrained_weight != None))  #
     oldpi = policy_func("oldpi", ob_space, ac_space)
     atarg = tf.placeholder(dtype=tf.float32, shape=[None])  # Target advantage function (if applicable)
     ret = tf.placeholder(dtype=tf.float32, shape=[None])  # Empirical return
@@ -227,7 +228,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     ep_stats = stats(["True_rewards", "Rewards", "Episode_length"])
     # if provide pretrained weight
     if pretrained_weight is not None:
-        U.load_state(pretrained_weight, var_list=pi.get_variables())
+        U.load_variables(pretrained_weight, variables=pi.get_variables())
 
     while True:
         if callback: callback(locals(), globals())
@@ -248,7 +249,9 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         logger.log("********** Iteration %i ************" % iters_so_far)
 
         def fisher_vector_product(p):
-            return allmean(compute_fvp(p, *fvpargs)) + cg_damping * p
+            v1 = allmean(compute_fvp(p, *fvpargs))
+            # print("norm(v1):%.2e, norm(p):%.2e, cg_damping:%.2e"%(np.linalg.norm(v1), np.linalg.norm(p), cg_damping))
+            return v1 + cg_damping * p
         # ------------------ Update G ------------------
         logger.log("Optimizing Policy...")
         for _ in range(g_step):
@@ -280,8 +283,17 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                 logger.log("Got zero gradient. not updating")
             else:
                 with timed("cg"):
+                    stepdir0 = cg(fisher_vector_product, g, cg_iters=10, verbose=rank == 0)
+                    print('iter:10, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
+                        g - compute_fvp(stepdir0, *fvpargs))))
                     stepdir = cg(fisher_vector_product, g, cg_iters=cg_iters, verbose=rank == 0)
+                    print('iter:100, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
+                        g - compute_fvp(stepdir, *fvpargs))))
+                    '''stepdir2 = cg(fisher_vector_product, g, cg_iters=200, verbose=rank == 0)
+                    print('iter:200, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
+                        g - compute_fvp(stepdir2, *fvpargs))))'''
                 assert np.isfinite(stepdir).all()
+
                 shs = .5*stepdir.dot(fisher_vector_product(stepdir))
                 lm = np.sqrt(shs / max_kl)
                 # logger.log("lagrange multiplier:", lm, "gnorm:", np.linalg.norm(g))
@@ -325,13 +337,15 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         for (lossname, lossval) in zip(loss_names, meanlosses):
             logger.record_tabular(lossname, lossval)
         logger.record_tabular("ev_tdlam_before", explained_variance(vpredbefore, tdlamret))
+        #mean = pi.pd.mean.eval()
+        #print(mean)
         # ------------------ Update D ------------------
         logger.log("Optimizing Discriminator...")
         logger.log(fmt_row(13, reward_giver.loss_name))
         ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob))
         batch_size = len(ob) // d_step
         d_losses = []  # list of tuples, each of which gives the loss for a minibatch
-        dof = env.env.dof
+        dof = env.env.env.dof
         for ob_batch, goal_batch, obs_pos_batch, obs_ori_batch, ac_batch in dataset.iterbatches(
                 (config, goal, obstacle_pos, obstacle_ori, ac),
                 include_final_partial_batch=False, batch_size=batch_size):
@@ -368,4 +382,5 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
 
 
 def flatten_lists(listoflists):
+    # return a flat array listoflists which is a 2d list
     return [el for list_ in listoflists for el in list_]

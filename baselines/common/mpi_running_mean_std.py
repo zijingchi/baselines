@@ -37,7 +37,6 @@ class RunningMeanStd(object):
                      tf.assign_add(self._sumsq, newsumsq),
                      tf.assign_add(self._count, newcount)])
 
-
     def update(self, x):
         x = x.astype('float64')
         n = int(np.prod(self.shape))
@@ -46,6 +45,7 @@ class RunningMeanStd(object):
         if MPI is not None:
             MPI.COMM_WORLD.Allreduce(addvec, totalvec, op=MPI.SUM)
         self.incfiltparams(totalvec[0:n].reshape(self.shape), totalvec[n:2*n].reshape(self.shape), totalvec[2*n])
+        #print(self._count.eval())
 
 @U.in_session
 def test_runningmeanstd():

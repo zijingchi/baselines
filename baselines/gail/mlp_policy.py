@@ -107,15 +107,20 @@ class MlpPolicy4Dict(object):
         goal_last_out = tf.clip_by_value((ob_target - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)'''
         last_out = ob_config
         goal_last_out = ob_target
-        op_last_out = tf.layers.batch_normalization(obs_pos, True, name="obs_pos_bn")
-        oo_last_out = tf.layers.batch_normalization(obs_ori, True, name="obs_ori_bn")
-        op_last_out = tf.nn.tanh(dense(op_last_out, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0)))
-        oo_last_out = tf.nn.tanh(dense(oo_last_out, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0)))
+        #op_last_out = tf.layers.batch_normalization(obs_pos, True, name="obs_pos_bn")
+        #oo_last_out = tf.layers.batch_normalization(obs_ori, True, name="obs_ori_bn")
+        op_last_out = tf.nn.tanh(dense(obs_pos, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0),
+                                       weight_loss_dict={}))
+        oo_last_out = tf.nn.tanh(dense(obs_ori, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0),
+                                       weight_loss_dict={}))
         obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
         for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(dense(last_out, hid_size, "vfcfc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
-            goal_last_out = tf.nn.tanh(dense(goal_last_out, hid_size, "vfgfc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
-            obs_last_out = tf.nn.tanh(dense(obs_last_out, hid_size, "vfobsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+            last_out = tf.nn.tanh(dense(last_out, hid_size, "vfcfc%i" % (i+1), weight_init=U.normc_initializer(1.0),
+                                              weight_loss_dict={}))
+            goal_last_out = tf.nn.tanh(dense(goal_last_out, hid_size, "vfgfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                                   weight_loss_dict={}))
+            obs_last_out = tf.nn.tanh(dense(obs_last_out, hid_size, "vfobsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                                  weight_loss_dict={}))
         vpred = tf.concat([last_out, goal_last_out, obs_last_out], -1)
         self.vpred = dense(vpred, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:, 0]
 
@@ -125,15 +130,18 @@ class MlpPolicy4Dict(object):
         obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
 
         for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(dense(last_out, hid_size, "pol_cfg_fc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
+            last_out = tf.nn.tanh(dense(last_out, hid_size, "pol_cfg_fc%i" % (i+1), weight_init=U.normc_initializer(1.0),
+                                              weight_loss_dict={}))
             goal_last_out = tf.nn.tanh(
-                dense(goal_last_out, hid_size, "pol_g_fc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+                dense(goal_last_out, hid_size, "pol_g_fc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                      weight_loss_dict={}))
             obs_last_out = tf.nn.tanh(
-                dense(obs_last_out, hid_size, "pol_obs_fc%i" % (i + 1), weight_init=U.normc_initializer(1.0)))
+                dense(obs_last_out, hid_size, "pol_obs_fc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                      weight_loss_dict={}))
         last_out = tf.concat([last_out, goal_last_out, obs_last_out], -1)
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
-            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer())
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.constant_initializer(-3))
             pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
         else:
             pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))

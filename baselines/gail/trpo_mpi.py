@@ -320,6 +320,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                                                       include_final_partial_batch=False,
                                                       batch_size=batch_size):
             ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob_batch))
+            #print("ob_batch", ob_batch[0])
             # update running mean/std for reward_giver
             if hasattr(reward_giver, "obs_rms"): reward_giver.obs_rms.update(np.concatenate((ob_batch, ob_expert), 0))
             *newlosses, g = reward_giver.lossandgrad(ob_batch, ac_batch, ob_expert, ac_expert)

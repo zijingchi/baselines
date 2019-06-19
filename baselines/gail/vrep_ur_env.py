@@ -33,15 +33,11 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         )
 
         # Settings
-        self.init_joint_pos = np.array([0, -pi / 12, -3 * pi / 4, 0, pi / 2])
-        self.target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
+
         self.obstacle_pos = 5*np.ones(3)
         self.obstacle_ori = np.zeros(3)
         # All joints
         ur5_joints = ['UR5_joint1', 'UR5_joint2', 'UR5_joint3', 'UR5_joint4', 'UR5_joint5']
-        # All shapes
-        # ur5_links_visible = ['UR5_link1_visible','UR5_link2_visible','UR5_link3_visible',
-        #	'UR5_link4_visible','UR5_link5_visible','UR6_link1_visible','UR5_link7_visible']
 
         # Getting object handles
         self.obstacle = self.get_object_handle('Obstacle')
@@ -58,7 +54,6 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         self.distance_handle = self.get_distance_handle('Distance')
         self.distance = -1
 
-        self.random_init = random_initial
         self.enable_cameras = enable_cameras
         self.dof = dof
         h = 256
@@ -67,10 +62,13 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         self.img_size = [h, w, c]
         # Actuators
         self.oh_joint = list(map(self.get_object_handle, ur5_joints))
+        self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2])
+        self.target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
         self.l2_thresh = l2_thresh
         self.collision_handle = self.get_collision_handle('Collision1')
+        #self.self_col_handle = self.get_collision_handle('SelfCollision')
         joint_space = np.ones(self.dof)
-        self.action_space = spaces.Box(low=-0.08*joint_space, high=0.08*joint_space)
+        self.action_space = spaces.Box(low=-0.12*joint_space, high=0.12*joint_space)
         joint_bound = 2*pi*joint_space
         obstacle_pos_lbound = np.array([-5, -5, 0])
         obstalce_pos_hbound = np.array([5, 5, 2])
@@ -164,17 +162,33 @@ class UR5VrepEnv(vrep_env.VrepEnv):
             self.obj_set_joint_position(j, a)
 
     def compute_reward(self, state, action):
-        approach = 5 if self._angle_dis(state, self.target_joint_pos, 5) < self.l2_thresh else 0
-        collision = -3 if self.collision_check else 0
-        #danger = -1 if self.distance < 3e-2 else 0
-        return approach+collision
+        config_dis = self._angle_dis(state, self.target_joint_pos, 5)
+        pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
+        approach = 1 if config_dis < self.l2_thresh else 0
+        level = 0
+        if config_dis < 0.5*self.init_goal_dis < pre_config_dis:
+            level = 0.2
+        elif config_dis < 0.2*self.init_goal_dis < pre_config_dis:
+            level = 0.5
+        elif pre_config_dis < 0.5 * self.init_goal_dis < config_dis:
+            level = -0.2
+        elif pre_config_dis < 0.2 * self.init_goal_dis < config_dis:
+            level = -0.5
+        elif pre_config_dis < self.init_goal_dis < config_dis:
+            level = -0.8
+        collision = -1 if self.collision_check else 0
+        danger = -0.2 if self.distance < 3e-2 else 0
+        return approach+collision+danger+level
 
     def step(self, ac):
+        ac = np.clip(ac, self.action_space.low, self.action_space.high)
         self._make_observation()
 
         self._make_action(ac)
         self.step_simulation()
-        self.collision_check = self.read_collision(self.collision_handle)
+        self._make_observation()
+        self.collision_check = self.read_collision(self.collision_handle) or abs(self.observation['joint'][2])>5*pi/6
+        self.distance = self.read_distance(self.distance_handle)
         done = self._angle_dis(self.observation['joint'], self.target_joint_pos, 5) < self.l2_thresh or self.collision_check
         reward = self.compute_reward(self.observation['joint'], ac)
         return self.observation, reward, done, {}
@@ -185,16 +199,31 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         while self.sim_running:
             self.stop_simulation()
 
-        init_w = [0.6, 0.3, 0.3, 0.5, 0.5]
-        if self.random_init:
-            for i in range(self.dof):
-                self.init_joint_pos[i] += init_w[i]*np.random.randn()
-                self.target_joint_pos[i] += init_w[i]*np.random.randn()
+        init_w = [0.3, 0.1, 0.1, 0.2, 0.2]
+        self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2])
+        self.target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
+        init_joint_pos = self.init_joint_pos + np.multiply(init_w, np.random.randn(self.dof))
+        target_joint_pos = self.target_joint_pos + np.multiply(init_w, np.random.randn(self.dof))
         self.start_simulation()
-        self.set_joints(self.init_joint_pos)
+        while abs(init_joint_pos[2])>5*pi/6 or abs(target_joint_pos[2])>5*pi/6:
+            init_joint_pos[2] = self.init_joint_pos[2] + init_w[2]*np.random.randn()
+            target_joint_pos[2] = self.target_joint_pos[2] + init_w[2]*np.random.randn()
+        self.init_joint_pos = init_joint_pos
+        self.target_joint_pos = target_joint_pos
+        self.init_goal_dis = self._angle_dis(init_joint_pos, target_joint_pos, self.dof)
+        self.reset_obstacle()
+
+        tip_pos = self.obj_get_position(self.tip)
+        tip_ori = self.obj_get_orientation(self.tip)
+        self.obj_set_position(self.goal_viz, tip_pos)
+        self.obj_set_orientation(self.goal_viz, tip_ori)
+        '''self.set_joints(self.init_joint_pos)
         self.reset_obstacle()
         self.obj_set_position(self.obstacle, self.obstacle_pos)
-        self.obj_set_orientation(self.obstacle, self.obstacle_ori)
+        self.obj_set_orientation(self.obstacle, self.obstacle_ori)'''
+        while self._clear_obs_col():
+            self.reset_obstacle()
+
         self.step_simulation()
         ob = self._make_observation()
         '''concat_array = np.concatenate((self.observation['joint'],
@@ -208,7 +237,30 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         return np.linalg.norm(a1[:dof]-a2[:dof])
 
     def reset_obstacle(self):
-        pass
+        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(1))))
+        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(1))))
+        alpha = np.random.rand()
+        obs_pos = alpha*init_tip + (1-alpha)*goal_tip
+        obs_pos += np.concatenate((0.1*np.random.randn(2), np.array([0.1*np.random.rand()+0.25])))
+        obs_ori = 0.2*np.random.randn(3)
+        obs_ori[2] += pi/2
+        self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos'].low,
+                                    self.observation_space.spaces['obstacle_pos'].high)
+        self.obstacle_ori = np.clip(obs_ori, self.observation_space.spaces['obstacle_ori'].low,
+                                    self.observation_space.spaces['obstacle_ori'].high)
+
+    def _check_collision(self, pos, handle):
+        self.set_joints(pos)
+        self.step_simulation()
+        return self.read_collision(handle)
+
+    def _clear_obs_col(self):
+        self.step_simulation()
+        self.obj_set_position(self.obstacle, self.obstacle_pos)
+        self.obj_set_orientation(self.obstacle, self.obstacle_ori)
+        col1 = self._check_collision(self.target_joint_pos, self.collision_handle)
+        col2 = self._check_collision(self.init_joint_pos, self.collision_handle)
+        return col1 or col2
 
     def render(self, mode='human', close=False):
         pass
@@ -298,3 +350,61 @@ class VDset(object):
         labels = self.labels[self.pointer:end, :]
         self.pointer = end
         return inputs, labels
+
+
+def ur5fk(thetas):
+    d1 = 8.92e-2
+    d2 = 0.11
+    d5 = 9.475e-2
+    d6 = 7.495e-2
+    a2 = 4.251e-1
+    a3 = 3.9215e-1
+    All = np.zeros((6, 4, 4))
+    All[:, 3, 3] = 1
+    for i in range(6):
+        All[i, 0, 0] = np.cos(thetas[i])
+        All[i, 0, 1] = -np.sin(thetas[i])
+    All[0, 1, 0] = np.sin(thetas[0])
+    All[0, 1, 1] = np.cos(thetas[0])
+    All[0, 2, 3] = d1
+    All[0, 2, 2] = 1
+
+    All[1, 2, 0] = np.sin(thetas[1])
+    All[1, 2, 1] = np.cos(thetas[1])
+    All[1, 1, 2] = -1
+    All[1, 1, 3] = -d2
+
+    All[2, 1, 0] = np.sin(thetas[2])
+    All[2, 1, 1] = np.cos(thetas[2])
+    All[2, 0, 3] = a2
+    All[2, 2, 2] = 1
+
+    All[3, 1, 0] = np.sin(thetas[3])
+    All[3, 1, 1] = np.cos(thetas[3])
+    All[3, 0, 3] = a3
+    All[3, 2, 2] = 1
+
+    All[4, 2, 0] = np.sin(thetas[4])
+    All[4, 2, 1] = np.cos(thetas[4])
+    All[4, 1, 3] = -d5
+    All[4, 1, 2] = -1
+
+    All[5, :, :] = np.eye(4)
+    All[5, 1, 3] = -d6
+
+    A0 = np.zeros((4, 4))
+    A0[0, 1] = 1
+    A0[1, 0] = -1
+    A0[2, 2] = 1
+    A0[3, 3] = 1
+    A0[2, 3] = 0
+    return All, A0
+
+
+def tipcoor(thetas):
+    thetas_0 = np.array([0, pi / 2, 0, pi / 2, pi, 0])
+    thetas = thetas + thetas_0
+    All, A0 = ur5fk(thetas)
+    for A in All:
+        A0 = A0 @ A
+    return A0[:3, 3]

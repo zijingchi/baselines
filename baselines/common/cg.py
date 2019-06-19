@@ -15,7 +15,8 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
     for i in range(cg_iters):
         if callback is not None:
             callback(x)
-        if verbose: print(fmtstr % (i, rdotr, np.linalg.norm(x)))
+        if verbose and i % 5 == 0:
+            print(fmtstr % (i, rdotr, np.linalg.norm(x)))
         z = f_Ax(p)
         v = rdotr / p.dot(z)
         x += v*p
