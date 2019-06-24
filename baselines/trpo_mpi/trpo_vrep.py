@@ -111,13 +111,13 @@ def add_vtarg_and_adv(seg, gamma, lam):
     seg["tdlamret"] = seg["adv"] + seg["vpred"]
 
 
-def learn(env, policy_func, reward_giver, expert_dataset, rank,
+def learn(env, policy_func, rank,
           pretrained, pretrained_weight, *,
           g_step, d_step, entcoeff, save_per_iter,
           ckpt_dir, log_dir, timesteps_per_batch, task_name,
           gamma, lam,
           max_kl, cg_iters, cg_damping=1e-2,
-          vf_stepsize=1e-4, d_stepsize=1e-4, vf_iters=3,
+          vf_stepsize=1e-4, vf_iters=3,
           max_timesteps=0, max_episodes=0, max_iters=0,
           callback=None
           ):
@@ -161,8 +161,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     all_var_list = pi.get_trainable_variables()
     var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd") or v.name.startswith("pi/obs")]
     vf_var_list = [v for v in all_var_list if v.name.startswith("pi/vf") or v.name.startswith("pi/obs")]
-    # assert len(var_list) == len(vf_var_list) + 1
-    d_adam = MpiAdam(reward_giver.get_trainable_variables())
+
     vfadam = MpiAdam(vf_var_list)
 
     get_flat = U.GetFlat(var_list)

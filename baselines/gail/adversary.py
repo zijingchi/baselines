@@ -160,10 +160,12 @@ class TransitionClassifier4Dict(object):
             obs = (obs_ph - self.obs_rms.mean) / self.obs_rms.std'''
             obs_config = obs_ph
             obs_goal = goal_ph
-            op_last_out = tf.layers.batch_normalization(obs_pos_ph, True)
-            oo_last_out = tf.layers.batch_normalization(obs_ori_ph, True)
-            op_last_out = tf.contrib.layers.fully_connected(op_last_out, self.hidden_size, activation_fn=tf.nn.tanh)
-            oo_last_out = tf.contrib.layers.fully_connected(oo_last_out, self.hidden_size, activation_fn=tf.nn.tanh)
+            op_last_out = tf.contrib.layers.fully_connected(obs_pos_ph, self.hidden_size,)
+            oo_last_out = tf.contrib.layers.fully_connected(obs_ori_ph, self.hidden_size,)
+            op_last_out = tf.layers.batch_normalization(op_last_out, True, name="obs_pos_bn")
+            oo_last_out = tf.layers.batch_normalization(oo_last_out, True, name="obs_ori_bn")
+            op_last_out = tf.nn.tanh(op_last_out)
+            oo_last_out = tf.nn.tanh(oo_last_out)
             obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
             for i in range(self.hidden_layers):
                 obs_config = tf.contrib.layers.fully_connected(obs_config, self.hidden_size*2**(self.hidden_layers-1-i), activation_fn=tf.nn.tanh)

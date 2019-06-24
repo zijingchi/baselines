@@ -50,7 +50,7 @@ def argsparser():
     parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=2e5)
     # Behavior Cloning
     boolean_flag(parser, 'pretrained', default=True, help='Use BC to pretrain')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=8e3)
+    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=4e3)
     return parser.parse_args()
 
 
@@ -71,7 +71,8 @@ def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
     env = UR5VrepEnv(obs_space_type='dict')
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=150)
+    from baselines.common.wrappers import TimeLimit
+    env = TimeLimit(env, max_episode_steps=100)
     def policy_fn(name, ob_space, ac_space, reuse=False):
         return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
                                     reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
@@ -85,7 +86,7 @@ def main(args):
 
     if args.task == 'train':
         dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
-        reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=2,
+        reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=3,
                                                  ob_shape=16, entcoeff=args.adversary_entcoeff)
         train(env,
               args.seed,
@@ -147,7 +148,7 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                             ckpt_dir=checkpoint_dir, log_dir=log_dir,
                             save_per_iter=save_per_iter,
                             timesteps_per_batch=512,
-                            max_kl=0.1, cg_iters=100, cg_damping=0.1,
+                            max_kl=0.04, cg_iters=80, cg_damping=0.01,
                             gamma=0.995, lam=0.97,
                             vf_iters=5, vf_stepsize=1e-3,
                             task_name=task_name)

@@ -38,8 +38,8 @@ def argsparser():
     return parser.parse_args()
 
 
-def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
-          adam_epsilon=1e-5, optim_stepsize=1e-3,
+def learn(env, policy_func, dataset, optim_batch_size=256, max_iters=5e3,
+          adam_epsilon=1e-7, optim_stepsize=1e-4,
           ckpt_dir=None, log_dir=None, task_name=None,
           verbose=False):
 
@@ -58,13 +58,11 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
     stochastic = U.get_placeholder_cached(name="stochastic")
     loss = tf.reduce_mean(tf.square(ac-pi.ac))
     # loss = tf.reduce_mean(pi.pd.neglogp(ac))
-    #var_list = pi.get_trainable_variables()
 
     all_var_list = pi.get_trainable_variables()
     var_list = [v for v in all_var_list if
                 v.name.startswith("pi/pol") or v.name.startswith("pi/logstd") or v.name.startswith("pi/obs")]
-    adam = MpiAdam(var_list, epsilon=adam_epsilon)
-    lossandgrad = U.function([ob_config, ob_target, obs_pos, obs_ori, ac, stochastic], [loss]+[U.flatgrad(loss, var_list)])
+    AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(loss, var_list=var_list)
 
     U.initialize()
     if ckpt_dir is None:
@@ -76,7 +74,7 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
             U.load_variables(savedir_fname, pi.get_variables())
         except:
             print("size of the pretrained model does not match the current model")
-    adam.sync()
+
     logger.log("Pretraining with Behavior Cloning...")
     thresh = 0.1
     for iter_so_far in tqdm(range(int(max_iters))):
@@ -87,8 +85,10 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
         for i in range(len(avo)):
             avo[i] = ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
         # avo = ac_expert - thresh * (tar - cur) / np.linalg.norm(tar - cur)
-        train_loss, g = lossandgrad(cur, tar, ob_expert[:, -6:-3], ob_expert[:, -3:], avo, True)
-        adam.update(g, optim_stepsize)
+
+        U.get_session().run(AdamOp, feed_dict={ob_config: cur, ob_target: tar, obs_pos: ob_expert[:, -6:-3],
+                                    obs_ori:ob_expert[:, -3:], ac: avo, stochastic: True})
+
         if verbose and iter_so_far % val_per_iter == 0:
             ob_expert, ac_expert = dataset.get_next_batch(-1, 'val')
             tar = ob_expert[:, dof:2 * dof]
@@ -96,10 +96,12 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
             avo = np.zeros_like(cur)
             for i in range(len(avo)):
                 avo[i] = ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
-            val_loss, _ = lossandgrad(cur, tar, ob_expert[:, -6:-3], ob_expert[:, -3:], avo, True)
-            logger.log("Training loss: {}, Validation loss: {}".format(np.rad2deg(np.sqrt(train_loss)), np.rad2deg(np.sqrt(val_loss))))
-
-    U.save_variables(savedir_fname, variables=pi.get_variables())
+            val_loss = U.get_session().run(loss, feed_dict={ob_config: cur, ob_target: tar, obs_pos: ob_expert[:, -6:-3],
+                                obs_ori:ob_expert[:, -3:], ac: avo, stochastic: True})
+            logger.log("Validation loss: {}".format(np.rad2deg(np.sqrt(val_loss))))
+    allvar = pi.get_variables()
+    savevar = [v for v in allvar if "Adam" not in v.name]
+    U.save_variables(savedir_fname, variables=savevar)
     return savedir_fname
 
 
@@ -198,7 +200,7 @@ def main(args):
 
     def policy_fn(name, ob_space, ac_space, reuse=False):
         return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
-                                    reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
+                                    reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=2)
     env = bench.Monitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
     env.seed(args.seed)
@@ -220,7 +222,7 @@ def main(args):
                               policy_fn,
                               savedir_fname,
                               timesteps_per_batch=200,
-                              number_trajs=50,
+                              number_trajs=100,
                               stochastic_policy=args.stochastic_policy,
                               save=args.save_sample,
                               reuse=True)

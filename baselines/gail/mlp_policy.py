@@ -107,12 +107,14 @@ class MlpPolicy4Dict(object):
         goal_last_out = tf.clip_by_value((ob_target - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)'''
         last_out = ob_config
         goal_last_out = ob_target
-        #op_last_out = tf.layers.batch_normalization(obs_pos, True, name="obs_pos_bn")
-        #oo_last_out = tf.layers.batch_normalization(obs_ori, True, name="obs_ori_bn")
-        op_last_out = tf.nn.tanh(dense(obs_pos, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0),
-                                       weight_loss_dict={}))
-        oo_last_out = tf.nn.tanh(dense(obs_ori, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0),
-                                       weight_loss_dict={}))
+        op_last_out = dense(obs_pos, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0),
+                            weight_loss_dict={})
+        oo_last_out = dense(obs_ori, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0),
+                            weight_loss_dict={})
+        op_last_out = tf.layers.batch_normalization(op_last_out, True, name="obs_pos_bn")
+        oo_last_out = tf.layers.batch_normalization(oo_last_out, True, name="obs_ori_bn")
+        op_last_out = tf.nn.tanh(op_last_out)
+        oo_last_out = tf.nn.tanh(oo_last_out)
         obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
         for i in range(num_hid_layers):
             last_out = tf.nn.tanh(dense(last_out, hid_size, "vfcfc%i" % (i+1), weight_init=U.normc_initializer(1.0),
