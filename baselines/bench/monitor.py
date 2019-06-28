@@ -49,7 +49,6 @@ class Monitor(Wrapper):
         self.rewards = []
         self.needs_reset = False
 
-
     def step(self, action):
         if self.needs_reset:
             raise RuntimeError("Tried to step environment that needs reset")

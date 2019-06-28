@@ -397,7 +397,7 @@ def configure(dir=None, format_strs=None, comm=None, log_suffix=''):
     log('Logging to %s'%dir)
 
 def _configure_default_logger():
-    configure()
+    configure(osp.join(datetime.datetime.now().__str__(), 'logdir'))
     Logger.DEFAULT = Logger.CURRENT
 
 def reset():

@@ -46,7 +46,7 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
     val_per_iter = int(max_iters/10)
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_func("pi", ob_space, ac_space)  # Construct network for new policy
+    pi = policy_func("pi", ob_space, ac_space)  # Construct network for new polic
     dof = 5
     # placeholder
     ob_config = U.get_placeholder_cached(name="ob")
@@ -60,7 +60,7 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
     # loss = tf.reduce_mean(pi.pd.neglogp(ac))
     #var_list = pi.get_trainable_variables()
 
-    all_var_list = pi.get_trainable_variables()
+    all_var_list = pi.get_variables()
     var_list = [v for v in all_var_list if
                 v.name.startswith("pi/pol") or v.name.startswith("pi/logstd") or v.name.startswith("pi/obs")]
     adam = MpiAdam(var_list, epsilon=adam_epsilon)

@@ -37,12 +37,12 @@ class MlpPolicy(object):
 
         last_out = obz
         for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(dense(last_out, hid_size, "vffc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
+            last_out = tf.nn.tanh(dense(last_out, hid_size, "vffc%i" % (i+1), weight_init=U.normc_initializer(1.0), weight_loss_dict={}))
         self.vpred = dense(last_out, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:, 0]
 
         last_out = obz
         for i in range(num_hid_layers):
-            last_out = tf.nn.tanh(dense(last_out, hid_size, "polfc%i" % (i+1), weight_init=U.normc_initializer(1.0)))
+            last_out = tf.nn.tanh(dense(last_out, hid_size, "polfc%i" % (i+1), weight_init=U.normc_initializer(1.0), weight_loss_dict={}))
 
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
@@ -111,8 +111,8 @@ class MlpPolicy4Dict(object):
                             weight_loss_dict={})
         oo_last_out = dense(obs_ori, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0),
                             weight_loss_dict={})
-        op_last_out = tf.layers.batch_normalization(op_last_out, True, name="obs_pos_bn")
-        oo_last_out = tf.layers.batch_normalization(oo_last_out, True, name="obs_ori_bn")
+        op_last_out = tf.layers.batch_normalization(op_last_out, training=True, name="obs_pos_bn")
+        oo_last_out = tf.layers.batch_normalization(oo_last_out, training=True, name="obs_ori_bn")
         op_last_out = tf.nn.tanh(op_last_out)
         oo_last_out = tf.nn.tanh(oo_last_out)
         obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)

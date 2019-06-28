@@ -45,7 +45,7 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
     news = np.zeros(horizon, 'int32')
     acs = np.array([ac for _ in range(horizon)])
     prevacs = acs.copy()
-
+    viz_count = 0
     while True:
         prevac = ac
         ac, vpred = pi.act(stochastic, ob)
@@ -53,6 +53,7 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         # before returning segment [0, T-1] so we get the correct
         # terminal value
         if t > 0 and t % horizon == 0:
+            viz_count += 1
             yield {"ob": obs, "rew": rews, "vpred": vpreds, "new": news,
                    "ac": acs, "prevac": prevacs, "nextvpred": vpred * (1 - new),
                    "ep_rets": ep_rets, "ep_lens": ep_lens, "ep_true_rets": ep_true_rets}
@@ -70,6 +71,8 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         prevacs[i] = prevac
 
         rew = reward_giver.get_reward(ob, ac)
+        #if viz_count%10==0:
+        #    env.render()
         ob, true_rew, new, _ = env.step(ac)
         rews[i] = rew
         true_rews[i] = true_rew
@@ -164,6 +167,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         tangents.append(tf.reshape(flat_tangent[start:start+sz], shape))
         start += sz
     gvp = tf.add_n([tf.reduce_sum(g*tangent) for (g, tangent) in zipsame(klgrads, tangents)])  # pylint: disable=E1111
+    epilison = 1.
     fvp = U.flatgrad(gvp, var_list)
 
     assign_old_eq_new = U.function([], [], updates=[tf.assign(oldv, newv)
@@ -196,8 +200,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     set_from_flat(th_init)
     d_adam.sync()
     vfadam.sync()
-    if rank == 0:
-        print("Init param sum", th_init.sum(), flush=True)
+
 
     # Prepare for rollouts
     # ----------------------------------------
@@ -218,7 +221,10 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     ep_stats = stats(["True_rewards", "Rewards", "Episode_length"])
     # if provide pretrained weight
     if pretrained_weight is not None:
-        U.load_state(pretrained_weight, var_list=pi.get_variables())
+        U.load_variables(pretrained_weight, variables=var_list)
+    th_init = get_flat()
+    if rank == 0:
+        print("Init param mean:{}, var{}".format(th_init.mean(), th_init.var()),  flush=True)
 
     while True:
         if callback: callback(locals(), globals())
@@ -239,7 +245,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         logger.log("********** Iteration %i ************" % iters_so_far)
 
         def fisher_vector_product(p):
-            return allmean(compute_fvp(p, *fvpargs)) + cg_damping * p
+            return epilison*allmean(compute_fvp(p, *fvpargs)) + epilison*cg_damping * p
         # ------------------ Update G ------------------
         logger.log("Optimizing Policy...")
         for _ in range(g_step):
@@ -260,7 +266,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
             with timed("computegrad"):
                 *lossbefore, g = compute_lossandgrad(*args)
             lossbefore = allmean(np.array(lossbefore))
-            g = allmean(g)
+            g = epilison*allmean(g)
             if np.allclose(g, 0):
                 logger.log("Got zero gradient. not updating")
             else:
@@ -268,7 +274,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                     stepdir = cg(fisher_vector_product, g, cg_iters=cg_iters, verbose=rank == 0)
                 assert np.isfinite(stepdir).all()
                 shs = .5*stepdir.dot(fisher_vector_product(stepdir))
-                lm = np.sqrt(shs / max_kl)
+                lm = np.sqrt(shs / (epilison*max_kl))
                 # logger.log("lagrange multiplier:", lm, "gnorm:", np.linalg.norm(g))
                 fullstep = stepdir / lm
                 expectedimprove = g.dot(fullstep)

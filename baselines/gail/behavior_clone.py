@@ -23,9 +23,9 @@ from baselines.gail.dataset.mujoco_dset import Mujoco_Dset
 
 def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of Behavior Cloning")
-    parser.add_argument('--env_id', help='environment ID', default='Hopper-v1')
+    parser.add_argument('--env_id', help='environment ID', default='Hopper-v2')
     parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='data/deterministic.trpo.Hopper.0.00.npz')
+    parser.add_argument('--expert_path', type=str, default='dataset/deterministic.trpo.Hopper.0.00.npz')
     parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
     parser.add_argument('--log_dir', help='the directory to save log file', default='log')
     #  Mujoco Dataset Configuration
@@ -35,7 +35,7 @@ def argsparser():
     # for evaluatation
     boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
     boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=1e5)
+    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=2e4)
     return parser.parse_args()
 
 
@@ -53,7 +53,9 @@ def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
     ac = pi.pdtype.sample_placeholder([None])
     stochastic = U.get_placeholder_cached(name="stochastic")
     loss = tf.reduce_mean(tf.square(ac-pi.ac))
-    var_list = pi.get_trainable_variables()
+    all_var_list = pi.get_trainable_variables()
+    var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd")]
+    #var_list = pi.get_trainable_variables()
     adam = MpiAdam(var_list, epsilon=adam_epsilon)
     lossandgrad = U.function([ob, ac, stochastic], [loss]+[U.flatgrad(loss, var_list)])
 
@@ -73,7 +75,7 @@ def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
         savedir_fname = tempfile.TemporaryDirectory().name
     else:
         savedir_fname = osp.join(ckpt_dir, task_name)
-    U.save_state(savedir_fname, var_list=pi.get_variables())
+    U.save_variables(savedir_fname, variables=var_list)
     return savedir_fname
 
 

@@ -25,9 +25,9 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
         x += v*p
         r -= v*z
         newrdotr = r.dot(r)
-        if newrdotr<minr:
+        '''if newrdotr<minr:
             minr = newrdotr
-            bestx = x
+            bestx = x'''
         mu = newrdotr/rdotr
         p = r + mu*p
 
@@ -38,4 +38,4 @@ def cg(f_Ax, b, cg_iters=10, callback=None, verbose=False, residual_tol=1e-10):
     if callback is not None:
         callback(x)
     if verbose: print(fmtstr % (i+1, rdotr, np.linalg.norm(x)))  # pylint: disable=W0631
-    return bestx
+    return x
