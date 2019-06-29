@@ -329,7 +329,7 @@ class PathPlanDset(object):
                 obs = data['observations']
                 obstacle_pos = inits['obstacle_pos']
                 obstacle_ori = inits['obstacle_ori']
-                for t in range(len(obs)):
+                for t in range(1, len(obs)):
                     inp = obs[t]
                     inp = np.append(inp, inits['target_joint_pos'])
                     inp = np.append(inp, obstacle_pos)
