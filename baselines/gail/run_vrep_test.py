@@ -39,7 +39,7 @@ def argsparser():
     parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
     # Network Configuration (Using MLP Policy)
     parser.add_argument('--policy_hidden_size', type=int, default=200)
-    parser.add_argument('--adversary_hidden_size', type=int, default=100)
+    parser.add_argument('--adversary_hidden_size', type=int, default=150)
     # Algorithms Configuration
     parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
     parser.add_argument('--max_kl', type=float, default=0.01)
@@ -148,7 +148,7 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                             ckpt_dir=checkpoint_dir, log_dir=log_dir,
                             save_per_iter=save_per_iter,
                             timesteps_per_batch=512,
-                            max_kl=0.04, cg_iters=80, cg_damping=0.01,
+                            max_kl=0.04, cg_iters=80, cg_damping=0.1,
                             gamma=0.995, lam=0.97,
                             vf_iters=5, vf_stepsize=1e-3,
                             task_name=task_name)

@@ -25,7 +25,7 @@ def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of Behavior Cloning")
     parser.add_argument('--env_id', help='environment ID', default='Hopper-v2')
     parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='dataset/deterministic.trpo.Hopper.0.00.npz')
+    parser.add_argument('--expert_path', type=str, default='dataset/stochastic.trpo.Hopper.0.00.npz')
     parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
     parser.add_argument('--log_dir', help='the directory to save log file', default='log')
     #  Mujoco Dataset Configuration
@@ -33,7 +33,7 @@ def argsparser():
     # Network Configuration (Using MLP Policy)
     parser.add_argument('--policy_hidden_size', type=int, default=100)
     # for evaluatation
-    boolean_flag(parser, 'stochastic_policy', default=False, help='use stochastic/deterministic policy to evaluate')
+    boolean_flag(parser, 'stochastic_policy', default=True, help='use stochastic/deterministic policy to evaluate')
     boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
     parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=2e4)
     return parser.parse_args()
@@ -52,7 +52,8 @@ def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
     ob = U.get_placeholder_cached(name="ob")
     ac = pi.pdtype.sample_placeholder([None])
     stochastic = U.get_placeholder_cached(name="stochastic")
-    loss = tf.reduce_mean(tf.square(ac-pi.ac))
+    # loss = tf.reduce_mean(tf.square(ac-pi.ac))
+    loss = pi.pd.neglogp(ac)
     all_var_list = pi.get_trainable_variables()
     var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd")]
     #var_list = pi.get_trainable_variables()

@@ -232,7 +232,8 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     # if provide pretrained weight
     if pretrained_weight is not None:
         U.load_variables(pretrained_weight, variables=pi.get_variables())
-
+    th_afterbc = get_flat()
+    print("param sum after bc", th_afterbc.sum(), flush=True)
     while True:
         if callback: callback(locals(), globals())
         if max_timesteps and timesteps_so_far >= max_timesteps:

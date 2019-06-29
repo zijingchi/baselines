@@ -157,6 +157,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
 
     get_flat = U.GetFlat(var_list)
     set_from_flat = U.SetFromFlat(var_list)
+    print_tensor = U.PrintTensor(var_list)
     klgrads = tf.gradients(dist, var_list)
     flat_tangent = tf.placeholder(dtype=tf.float32, shape=[None], name="flat_tan")
     shapes = [var.get_shape().as_list() for var in var_list]
@@ -173,6 +174,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     assign_old_eq_new = U.function([], [], updates=[tf.assign(oldv, newv)
                                                     for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
     compute_losses = U.function([ob, ac, atarg], losses)
+    compute_ratio = U.function([ob, ac], [pi.pd.logp(ac), oldpi.pd.logp(ac)])
     compute_lossandgrad = U.function([ob, ac, atarg], losses + [U.flatgrad(optimgain, var_list)])
     compute_fvp = U.function([flat_tangent, ob, ac, atarg], fvp)
     compute_vflossandgrad = U.function([ob, ret], U.flatgrad(vferr, vf_var_list))
@@ -198,9 +200,11 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     th_init = get_flat()
     MPI.COMM_WORLD.Bcast(th_init, root=0)
     set_from_flat(th_init)
+    #print_tensor()
     d_adam.sync()
     vfadam.sync()
-
+    if rank == 0:
+        print("Init param sum", th_init.sum(), flush=True)
 
     # Prepare for rollouts
     # ----------------------------------------
@@ -220,11 +224,10 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     d_loss_stats = stats(reward_giver.loss_name)
     ep_stats = stats(["True_rewards", "Rewards", "Episode_length"])
     # if provide pretrained weight
-    if pretrained_weight is not None:
+    '''if pretrained_weight is not None:
         U.load_variables(pretrained_weight, variables=var_list)
-    th_init = get_flat()
-    if rank == 0:
-        print("Init param mean:{}, var{}".format(th_init.mean(), th_init.var()),  flush=True)
+    th_afterbc = get_flat()
+    print("param sum after bc", th_afterbc.sum(), flush=True)'''
 
     while True:
         if callback: callback(locals(), globals())
@@ -273,7 +276,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                 with timed("cg"):
                     stepdir = cg(fisher_vector_product, g, cg_iters=cg_iters, verbose=rank == 0)
                 assert np.isfinite(stepdir).all()
-                shs = .5*stepdir.dot(fisher_vector_product(stepdir))
+                shs = .5*stepdir.dot(compute_fvp(stepdir, *fvpargs))
                 lm = np.sqrt(shs / (epilison*max_kl))
                 # logger.log("lagrange multiplier:", lm, "gnorm:", np.linalg.norm(g))
                 fullstep = stepdir / lm
@@ -284,6 +287,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                 for _ in range(10):
                     thnew = thbefore + fullstep * stepsize
                     set_from_flat(thnew)
+                    a = compute_ratio(ob, ac)
                     meanlosses = surr, kl, *_ = allmean(np.array(compute_losses(*args)))
                     improve = surr - surrbefore
                     logger.log("Expected: %.3f Actual: %.3f" % (expectedimprove, improve))

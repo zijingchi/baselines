@@ -261,6 +261,16 @@ class GetFlat(object):
     def __call__(self):
         return tf.get_default_session().run(self.op)
 
+class PrintTensor(object):
+    def __init__(self, var_list):
+        self.var_list = var_list
+        #self.name_list = [v.name for v in var_list]
+
+    def __call__(self):
+        for v in self.var_list:
+            valuet = get_session().run(v)
+            print(v.name, valuet[0])
+
 def flattenallbut0(x):
     return tf.reshape(x, [-1, intprod(x.get_shape().as_list()[1:])])
 

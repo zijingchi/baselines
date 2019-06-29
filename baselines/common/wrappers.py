@@ -11,7 +11,7 @@ class TimeLimit(gym.Wrapper):
         self._elapsed_steps += 1
         if self._elapsed_steps >= self._max_episode_steps:
             done = True
-            reward = -3
+            reward = -1
             info['TimeLimit.truncated'] = True
         return observation, reward, done, info
 
