@@ -20,7 +20,7 @@ from baselines.common.cg import cg
 from baselines.gail.statistics import stats
 
 
-def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
+def traj_segment_generator(pi, env, horizon, stochastic):
 
     # Initialize state variables
     t = 0
@@ -75,15 +75,14 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         acs[i] = ac
         prevacs[i] = prevac
 
-        rew = reward_giver.get_reward(ob["joint"], ob["target"], ob["obstacle_pos"], ob["obstacle_ori"], ac)
         try:
             ob, true_rew, new, _ = env.step(ac)
         except:
             print('error when step simulation... retrying...')
-        rews[i] = rew
+        rews[i] = true_rew
         true_rews[i] = true_rew
 
-        cur_ep_ret += rew
+        cur_ep_ret += true_rew
         cur_ep_true_ret += true_rew
         cur_ep_len += 1
         if new:
@@ -206,14 +205,13 @@ def learn(env, policy_func, rank,
     th_init = get_flat()
     MPI.COMM_WORLD.Bcast(th_init, root=0)
     set_from_flat(th_init)
-    d_adam.sync()
     vfadam.sync()
     if rank == 0:
         print("Init param sum", th_init.sum(), flush=True)
 
     # Prepare for rollouts
     # ----------------------------------------
-    seg_gen = traj_segment_generator(pi, env, reward_giver, timesteps_per_batch, stochastic=True)
+    seg_gen = traj_segment_generator(pi, env, timesteps_per_batch, stochastic=True)
 
     episodes_so_far = 0
     timesteps_so_far = 0
@@ -222,11 +220,11 @@ def learn(env, policy_func, rank,
     lenbuffer = deque(maxlen=40)  # rolling buffer for episode lengths
     rewbuffer = deque(maxlen=40)  # rolling buffer for episode rewards
     true_rewbuffer = deque(maxlen=40)
-
+    max_trm = -5
+    true_reward_mean = 0
     assert sum([max_iters > 0, max_timesteps > 0, max_episodes > 0]) == 1
 
     g_loss_stats = stats(loss_names)
-    d_loss_stats = stats(reward_giver.loss_name)
     ep_stats = stats(["True_rewards", "Rewards", "Episode_length"])
     # if provide pretrained weight
     if pretrained_weight is not None:
@@ -242,11 +240,12 @@ def learn(env, policy_func, rank,
             break
 
         # Save model
-        if rank == 0 and iters_so_far % save_per_iter == 0 and ckpt_dir is not None:
+        if rank == 0 and ckpt_dir is not None and true_reward_mean > max_trm:
             fname = os.path.join(ckpt_dir, task_name)
             os.makedirs(os.path.dirname(fname), exist_ok=True)
             saver = tf.train.Saver()
             saver.save(tf.get_default_session(), fname)
+            max_trm = true_reward_mean
 
         logger.log("********** Iteration %i ************" % iters_so_far)
 
@@ -289,7 +288,7 @@ def learn(env, policy_func, rank,
                     print('iter:10, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
                         g - compute_fvp(stepdir0, *fvpargs))))'''
                     stepdir = cg(fisher_vector_product, g, cg_iters=cg_iters, verbose=rank == 0)
-                    print('iter:{:d}, norm of g: {:.4f}, error of cg: {:.4f}'.format(cg_iters, np.linalg.norm(g), np.linalg.norm(
+                    logger.log('iter:{:d}, norm of g: {:.4f}, error of cg: {:.4f}'.format(cg_iters, np.linalg.norm(g), np.linalg.norm(
                         g - compute_fvp(stepdir, *fvpargs))))
                     '''stepdir2 = cg(fisher_vector_product, g, cg_iters=200, verbose=rank == 0)
                     print('iter:200, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
@@ -339,26 +338,6 @@ def learn(env, policy_func, rank,
         for (lossname, lossval) in zip(loss_names, meanlosses):
             logger.record_tabular(lossname, lossval)
         logger.record_tabular("ev_tdlam_before", explained_variance(vpredbefore, tdlamret))
-        #mean = pi.pd.mean.eval()
-        #print(mean)
-        # ------------------ Update D ------------------
-        logger.log("Optimizing Discriminator...")
-        logger.log(fmt_row(13, reward_giver.loss_name))
-        ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob))
-        batch_size = len(ob) // d_step
-        d_losses = []  # list of tuples, each of which gives the loss for a minibatch
-        dof = env.env.env.dof
-        for ob_batch, goal_batch, obs_pos_batch, obs_ori_batch, ac_batch in dataset.iterbatches(
-                (config, goal, obstacle_pos, obstacle_ori, ac),
-                include_final_partial_batch=False, batch_size=batch_size):
-            ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob_batch))
-            # update running mean/std for reward_giver
-            if hasattr(reward_giver, "obs_rms"): reward_giver.obs_rms.update(np.concatenate((ob_batch, ob_expert), 0))
-            *newlosses, g = reward_giver.lossandgrad(ob_batch, goal_batch, obs_pos_batch, obs_ori_batch, ac_batch,
-                                                     ob_expert[:, :dof], ob_expert[:, dof:2*dof], ob_expert[:, -6:-3], ob_expert[:, -3:], ac_expert)
-            d_adam.update(allmean(g), d_stepsize)
-            d_losses.append(newlosses)
-        logger.log(fmt_row(13, np.mean(d_losses, axis=0)))
 
         lrlocal = (seg["ep_lens"], seg["ep_rets"], seg["ep_true_rets"])  # local values
         listoflrpairs = MPI.COMM_WORLD.allgather(lrlocal)  # list of tuples
@@ -370,6 +349,7 @@ def learn(env, policy_func, rank,
         logger.record_tabular("EpLenMean", np.mean(lenbuffer))
         logger.record_tabular("EpRewMean", np.mean(rewbuffer))
         logger.record_tabular("EpTrueRewMean", np.mean(true_rewbuffer))
+        true_reward_mean = np.mean(true_rewbuffer)
         logger.record_tabular("EpThisIter", len(lens))
         episodes_so_far += len(lens)
         timesteps_so_far += sum(lens)

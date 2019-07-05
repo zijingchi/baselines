@@ -57,7 +57,7 @@ def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
 
     stochastic = U.get_placeholder_cached(name="stochastic")
     loss = tf.reduce_mean(tf.square(ac-pi.ac))
-    # loss = tf.reduce_mean(pi.pd.neglogp(ac))
+    #loss = tf.reduce_mean(pi.pd.neglogp(ac))
     #var_list = pi.get_trainable_variables()
 
     all_var_list = pi.get_variables()

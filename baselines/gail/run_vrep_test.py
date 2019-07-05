@@ -38,8 +38,8 @@ def argsparser():
     parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
     parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
     # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=200)
-    parser.add_argument('--adversary_hidden_size', type=int, default=150)
+    parser.add_argument('--policy_hidden_size', type=int, default=128)
+    parser.add_argument('--adversary_hidden_size', type=int, default=128)
     # Algorithms Configuration
     parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
     parser.add_argument('--max_kl', type=float, default=0.01)
@@ -50,7 +50,7 @@ def argsparser():
     parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=2e5)
     # Behavior Cloning
     boolean_flag(parser, 'pretrained', default=True, help='Use BC to pretrain')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=4e3)
+    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=8e3)
     return parser.parse_args()
 
 
@@ -132,7 +132,8 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
     #path = 'trpo_gail.with_pretrained.transition_limitation_-1.HalfCheetah.g_step_3.d_step_2.policy_entcoeff_0.001.adversary_entcoeff_0.001.seed_0'
     #pretrained_weight = "checkpoint/" + path
     if algo == 'trpo':
-        from baselines.gail import trpo_mpi4vrep
+        #from baselines.gail import trpo_mpi4vrep
+        from baselines.trpo_mpi import trpo_vrep
         # Set up for MPI seed
         rank = MPI.COMM_WORLD.Get_rank()
         if rank != 0:
@@ -140,17 +141,17 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
         workerseed = seed + 10000 * MPI.COMM_WORLD.Get_rank()
         set_global_seeds(workerseed)
         env.seed(workerseed)
-        trpo_mpi4vrep.learn(env, policy_fn, reward_giver, dataset, rank,
+        trpo_vrep.learn(env, policy_fn, rank,
                             pretrained=pretrained, pretrained_weight=pretrained_weight,
-                            g_step=g_step, d_step=d_step,
+                            g_step=1, d_step=d_step,
                             entcoeff=policy_entcoeff,
                             max_timesteps=num_timesteps,
                             ckpt_dir=checkpoint_dir, log_dir=log_dir,
                             save_per_iter=save_per_iter,
                             timesteps_per_batch=512,
-                            max_kl=0.04, cg_iters=80, cg_damping=0.1,
+                            max_kl=0.01, cg_iters=50, cg_damping=0.5,
                             gamma=0.995, lam=0.97,
-                            vf_iters=5, vf_stepsize=1e-3,
+                            vf_iters=5, vf_stepsize=1e-2,
                             task_name=task_name)
     else:
         raise NotImplementedError

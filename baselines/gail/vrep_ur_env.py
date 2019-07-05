@@ -11,7 +11,7 @@ pi = np.pi
 
 
 class UR5VrepEnv(vrep_env.VrepEnv):
-    metadata = {'render.modes': [], }
+    metadata = {'render.modes': ['human', 'rgb_array'], }
 
     def __init__(
             self,
@@ -37,7 +37,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         self.obstacle_pos = 5*np.ones(3)
         self.obstacle_ori = np.zeros(3)
         # All joints
-        ur5_joints = ['UR5_joint1', 'UR5_joint2', 'UR5_joint3', 'UR5_joint4', 'UR5_joint5']
+        ur5_joints = ['UR5_joint1', 'UR5_joint2', 'UR5_joint3', 'UR5_joint4', 'UR5_joint5'][:dof]
 
         # Getting object handles
         self.obstacle = self.get_object_handle('Obstacle')
@@ -90,16 +90,16 @@ class UR5VrepEnv(vrep_env.VrepEnv):
 
         self.seed()
 
-    def _calPathThroughVrep(self, clientID, minConfigsForPathPlanningPath, inFloats, emptyBuff):
+    def calPathThroughVrep(self, clientID, minConfigsForPathPlanningPath, inFloats, emptyBuff):
         """send the signal to v-rep and retrieve the path tuple calculated by the v-rep script"""
-        maxConfigsForDesiredPose = 10  # we will try to find 10 different states corresponding to the goal pose and order them according to distance from initial state
+        dof = self.dof
         maxTrialsForConfigSearch = 300  # a parameter needed for finding appropriate goal states
         searchCount = 1  # how many times OMPL will run for a given task
         # minConfigsForPathPlanningPath = 50  # interpolation states for the OMPL path
         minConfigsForIkPath = 100  # interpolation states for the linear approach path
         collisionChecking = 1  # whether collision checking is on or off
         inInts = [collisionChecking, minConfigsForIkPath, minConfigsForPathPlanningPath,
-                  maxConfigsForDesiredPose, maxTrialsForConfigSearch, searchCount]
+                  dof, maxTrialsForConfigSearch, searchCount]
         res, retInts, path, retStrings, retBuffer = vrep.simxCallScriptFunction(clientID,
                             'Dummy', vrep.sim_scripttype_childscript, 'findPath_goalIsState',
                             inInts, inFloats, [], emptyBuff, vrep.simx_opmode_oneshot_wait)
@@ -107,8 +107,8 @@ class UR5VrepEnv(vrep_env.VrepEnv):
                                                                               [inInts, inFloats, [], emptyBuff])"""
         if (res == 0) and len(path) > 0:
             n_path = retInts[0]
-            final = np.array(path[-5:])
-            tar = np.array(inFloats[-5:])
+            final = np.array(path[-self.dof:])
+            tar = np.array(inFloats[-self.dof:])
             if np.linalg.norm(final - tar) > 0.01:
                 n_path = 0
                 path = []
@@ -146,12 +146,15 @@ class UR5VrepEnv(vrep_env.VrepEnv):
             img2 = np.flip(img2, 2)
             img3 = np.flip(img3, 2)
             self.observation = {'joint': np.array(joint_angles).astype('float32'),
+                                'target': self.target_joint_pos,
+                                'obstacle_pos': self.obstacle_pos,
+                                'obstacle_ori': self.obstacle_ori,
                                 'image1': img1, 'image2': img2, 'image3': img3}
         else:
             self.observation = {'joint': np.array(joint_angles).astype('float32'),
                                 'target': self.target_joint_pos,
-                                'obstacle_pos': self.obstacle_pos,
-                                'obstacle_ori': self.obstacle_ori}
+                                'obstacle_ori': self.obstacle_ori,
+                                'obstacle_pos': self.obstacle_pos}
         return self.observation
 
     def set_joints(self, angles):
@@ -162,7 +165,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
         pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
         approach = 1 if config_dis < self.l2_thresh else 0
-        level = 0
+        '''level = 0
         if config_dis < 0.5*self.init_goal_dis < pre_config_dis:
             level = 0.2
         elif config_dis < 0.2*self.init_goal_dis < pre_config_dis:
@@ -174,20 +177,20 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         # elif pre_config_dis < self.init_goal_dis < config_dis:
         #     level = -0.8
         collision = -1 if self.collision_check else 0
-        danger = -0.2 if self.distance < 2e-2 else 0
-        return approach+collision+danger+level
+        danger = -0.2 if self.distance < 2e-2 else 0'''
+        return approach
 
     def step(self, ac):
-        ac = np.clip(ac, self.action_space.low, self.action_space.high)
+        # ac = np.clip(ac, self.action_space.low, self.action_space.high)
         self._make_observation()
-        cfg = self.observation['joint']
-        ac = ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
+        # cfg = self.observation['joint']
+        # ac = ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
         self._make_action(ac)
         self.step_simulation()
         self._make_observation()
         self.collision_check = self.read_collision(self.collision_handle) or abs(self.observation['joint'][2])>5*pi/6
         self.distance = self.read_distance(self.distance_handle)
-        done = self._angle_dis(self.observation['joint'], self.target_joint_pos, 5) < self.l2_thresh or self.collision_check
+        done = self._angle_dis(self.observation['joint'], self.target_joint_pos, self.dof) < self.l2_thresh or self.collision_check
         reward = self.compute_reward(self.observation['joint'], ac)
         return self.observation, reward, done, {}
 
@@ -197,9 +200,9 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         while self.sim_running:
             self.stop_simulation()
 
-        init_w = [0.3, 0.1, 0.1, 0.2, 0.2]
-        self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2])
-        self.target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
+        init_w = [0.1, 0.1, 0.1, 0.2, 0.2][:self.dof]
+        self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2])[:self.dof]
+        self.target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])[:self.dof]
         init_joint_pos = self.init_joint_pos + np.multiply(init_w, np.random.randn(self.dof))
         target_joint_pos = self.target_joint_pos + np.multiply(init_w, np.random.randn(self.dof))
         self.start_simulation()
@@ -227,21 +230,60 @@ class UR5VrepEnv(vrep_env.VrepEnv):
 
     def reset_expert(self):
         emptybuff = bytearray()
+        thresh = 0.1
         while True:
             ob = self.reset()
-            inFloats = self.init_joint_pos.tolist() + self.target_joint_pos.tolist()
-            n_path, _, res = self._calPathThroughVrep(self.cID, 100, inFloats, emptybuff)
+            n_mid = int(self._angle_dis(self.target_joint_pos, self.init_joint_pos, self.dof) / thresh)
+            linear_res = self.directly_towards(n_mid)
+            self.set_joints(self.init_joint_pos)
+            self.step_simulation()
+            if linear_res == 0:
+                final_path = self.linear_sub
+                n_path = n_mid
+            else:
+                inFloats = self.init_joint_pos.tolist() + self.target_joint_pos.tolist()
+                n_path, path, res = self.calPathThroughVrep(self.cID, 100, inFloats, emptybuff)
+                if res==3:
+                    time.sleep(3)
+                    break
+                np_path = np.array(path)
+                re_path = np_path.reshape((n_path, self.dof))
+                c0 = self.init_joint_pos
+                final_path = [c0]
+                for c in re_path:
+                    if self._angle_dis(c, c0, self.dof) > thresh:
+                        final_path.append(c)
+                        c0 = c
+                # if c0.any() != np.array(self.target_joint_pos).any():
+                #    final_path.append(np.array(self.target_joint_pos))
+                n_path = len(final_path)
             if n_path:
                 break
-        return ob
+        return n_path, final_path
+
+    def directly_towards(self, n):
+        init_jp = self.init_joint_pos
+        sub = (self.target_joint_pos - init_jp) / n
+        self.linear_sub = []
+        for i in range(n):
+            next_state = init_jp + sub * (i + 1)
+            self.linear_sub.append(next_state)
+            self.set_joints(next_state)
+            self.step_simulation()
+            colcheck = self.read_collision(self.collision_handle)
+            if colcheck == 1:
+                print('colliding during direct path')
+                return 1
+        print('reaching by direct path')
+        return 0
 
     def _angle_dis(self, a1, a2, dof):
         return np.linalg.norm(a1[:dof]-a2[:dof])
 
     def reset_obstacle(self):
-        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(1))))
-        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(1))))
-        alpha = 0.8*np.random.rand()-0.2
+        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6-self.dof))))
+        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6-self.dof))))
+        alpha = 0.5
         obs_pos = alpha*init_tip + (1-alpha)*goal_tip
         obs_pos += np.concatenate((0.1*np.random.randn(2), np.array([0.1*np.random.rand()+0.21])))
         obs_ori = 0.2*np.random.randn(3)
@@ -301,7 +343,7 @@ class PathPlanDset(object):
         self.obs_list = np.array(self.obs_list)
         self.acs_list = np.array(self.acs_list)
         train_size = int(train_fraction*len(self.obs_list))
-        self.dset = VDset(self.obs_list, self.acs_list, randomize)
+        # self.dset = VDset(self.obs_list, self.acs_list, randomize)
         # for behavior cloning
         self.train_set = VDset(self.obs_list[:train_size, :],
                                self.acs_list[:train_size, :],
