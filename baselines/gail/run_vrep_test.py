@@ -23,7 +23,7 @@ def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of GAIL")
     parser.add_argument('--env_id', help='environment ID', default='VREP-UR')
     parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='/home/ubuntu/vdp/5_2/')
+    parser.add_argument('--expert_path', type=str, default='/home/czj/vrep_path_dataset/4_7/')
     parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
     parser.add_argument('--log_dir', help='the directory to save log file', default='log')
     parser.add_argument('--load_model_path', help='if provided, load the model', type=str, default=None)
@@ -38,18 +38,18 @@ def argsparser():
     parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
     parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
     # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=128)
+    parser.add_argument('--policy_hidden_size', type=int, default=100)
     parser.add_argument('--adversary_hidden_size', type=int, default=128)
     # Algorithms Configuration
     parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
-    parser.add_argument('--max_kl', type=float, default=0.01)
+    parser.add_argument('--max_kl', type=float, default=0.02)
     parser.add_argument('--policy_entcoeff', help='entropy coefficiency of policy', type=float, default=1e-3)
     parser.add_argument('--adversary_entcoeff', help='entropy coefficiency of discriminator', type=float, default=1e-3)
     # Traing Configuration
     parser.add_argument('--save_per_iter', help='save model every xx iterations', type=int, default=100)
     parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=2e5)
     # Behavior Cloning
-    boolean_flag(parser, 'pretrained', default=True, help='Use BC to pretrain')
+    boolean_flag(parser, 'pretrained', default=False, help='Use BC to pretrain')
     parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=8e3)
     return parser.parse_args()
 
@@ -74,20 +74,23 @@ def main(args):
     from baselines.common.wrappers import TimeLimit
     env = TimeLimit(env, max_episode_steps=100)
     def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
+        return mlp_policy.MLPD(name=name, ob_space=ob_space, ac_space=ac_space,
                                     reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
     env = bench.Monitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
     env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
-    task_name = get_task_name(args)
+    #task_name = get_task_name(args)
+    task_name = "UR5PathPlanTRPO"
     args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
     args.log_dir = osp.join(args.log_dir, task_name)
 
     if args.task == 'train':
-        dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
-        reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=3,
-                                                 ob_shape=16, entcoeff=args.adversary_entcoeff)
+        #dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
+        dataset = {}
+        #reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=3,
+        #                                        ob_shape=16, entcoeff=args.adversary_entcoeff)
+        reward_giver = {}
         train(env,
               args.seed,
               policy_fn,
@@ -142,17 +145,17 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
         set_global_seeds(workerseed)
         env.seed(workerseed)
         trpo_vrep.learn(env, policy_fn, rank,
-                            pretrained=pretrained, pretrained_weight=pretrained_weight,
-                            g_step=1, d_step=d_step,
-                            entcoeff=policy_entcoeff,
-                            max_timesteps=num_timesteps,
-                            ckpt_dir=checkpoint_dir, log_dir=log_dir,
-                            save_per_iter=save_per_iter,
-                            timesteps_per_batch=512,
-                            max_kl=0.01, cg_iters=50, cg_damping=0.5,
-                            gamma=0.995, lam=0.97,
-                            vf_iters=5, vf_stepsize=1e-2,
-                            task_name=task_name)
+                        pretrained=pretrained, pretrained_weight=pretrained_weight,
+                        g_step=1, d_step=d_step,
+                        entcoeff=policy_entcoeff,
+                        max_timesteps=num_timesteps,
+                        ckpt_dir=checkpoint_dir, log_dir=log_dir,
+                        save_per_iter=save_per_iter,
+                        timesteps_per_batch=512,
+                        max_kl=0.01, cg_iters=30, cg_damping=0.5,
+                        gamma=0.995, lam=0.97,
+                        vf_iters=5, vf_stepsize=1e-2,
+                        task_name=task_name)
     else:
         raise NotImplementedError
 

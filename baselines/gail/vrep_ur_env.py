@@ -88,7 +88,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
                                                       obstacle_ori=spaces.Box(low=obstacle_ori_lbound,
                                                                               high=obstacle_ori_hbound)))
 
-        self.seed()
+        self.seed(0)
 
     def calPathThroughVrep(self, clientID, minConfigsForPathPlanningPath, inFloats, emptyBuff):
         """send the signal to v-rep and retrieve the path tuple calculated by the v-rep script"""
@@ -165,7 +165,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
         pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
         approach = 1 if config_dis < self.l2_thresh else 0
-        '''level = 0
+        level = 0
         if config_dis < 0.5*self.init_goal_dis < pre_config_dis:
             level = 0.2
         elif config_dis < 0.2*self.init_goal_dis < pre_config_dis:
@@ -177,14 +177,14 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         # elif pre_config_dis < self.init_goal_dis < config_dis:
         #     level = -0.8
         collision = -1 if self.collision_check else 0
-        danger = -0.2 if self.distance < 2e-2 else 0'''
+        danger = -0.2 if self.distance < 2e-2 else 0
         return approach
 
     def step(self, ac):
-        # ac = np.clip(ac, self.action_space.low, self.action_space.high)
+        ac = np.clip(ac, self.action_space.low, self.action_space.high)
         self._make_observation()
-        # cfg = self.observation['joint']
-        # ac = ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
+        cfg = self.observation['joint']
+        ac = ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
         self._make_action(ac)
         self.step_simulation()
         self._make_observation()
