@@ -13,6 +13,7 @@ class TimeLimit(gym.Wrapper):
             done = True
             reward = -1
             info['TimeLimit.truncated'] = True
+            info["status"] = "timeout"
         return observation, reward, done, info
 
     def reset(self, **kwargs):

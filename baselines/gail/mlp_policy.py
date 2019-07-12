@@ -172,3 +172,78 @@ class MlpPolicy4Dict(object):
 
     def get_initial_state(self):
         return []
+
+class MLPD(MlpPolicy):
+    def _init__(self, name, reuse=False, *args, **kwargs):
+        super(MLPD, self).__init__(name, reuse, *args, **kwargs)
+
+    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, gaussian_fixed_var=True):
+        assert isinstance(ob_space, gym.spaces.Dict)
+
+        self.pdtype = pdtype = make_pdtype(ac_space)
+        sequence_length = None
+
+        ob_config = U.get_placeholder(name="ob", dtype=tf.float32,
+                                      shape=[sequence_length] + list(ob_space.spaces['joint'].shape))
+        ob_target = U.get_placeholder(name="goal", dtype=tf.float32,
+                                      shape=[sequence_length] + list(ob_space.spaces['target'].shape))
+        obs_pos = U.get_placeholder(name="obs_pos", dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos'].shape))
+
+        last_out = ob_config
+        goal_last_out = ob_target
+        obs_last_out = obs_pos
+        for i in range(num_hid_layers):
+            last_out = dense(last_out, hid_size, "vfcfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                             weight_loss_dict={})
+            last_out = tf.nn.tanh(last_out)
+            goal_last_out = dense(goal_last_out, hid_size, "vfgfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                  weight_loss_dict={})
+            goal_last_out = tf.nn.tanh(goal_last_out)
+            obs_last_out = dense(obs_last_out, hid_size, "vfobsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                 weight_loss_dict={})
+            obs_last_out = tf.nn.tanh(obs_last_out)
+        vpred = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        self.vpred = dense(vpred, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:, 0]
+
+        # construct policy probability distribution model
+        last_out = ob_config
+        goal_last_out = ob_target
+        obs_last_out = obs_pos
+
+        for i in range(num_hid_layers):
+            last_out = dense(last_out, hid_size, "pol_cfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                             weight_loss_dict={})
+            #last_out = tf.layers.batch_normalization(last_out, training=is_training, name="pol_cbn%i"%(i+1))
+            last_out = tf.nn.tanh(last_out)
+            goal_last_out = dense(goal_last_out, hid_size, "pol_gfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                  weight_loss_dict={})
+            #goal_last_out = tf.layers.batch_normalization(goal_last_out, training=is_training, name="pol_gbn%i" % (i + 1))
+            goal_last_out = tf.nn.tanh(goal_last_out)
+            obs_last_out = dense(obs_last_out, hid_size, "pol_obsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                 weight_loss_dict={})
+            #obs_last_out = tf.layers.batch_normalization(obs_last_out, training=is_training, name="pol_obn%i"%(i+1))
+            obs_last_out = tf.nn.tanh(obs_last_out)
+        last_out = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
+            mean = dense(last_out, pdtype.param_shape()[0] // 2, "polfinal", U.normc_initializer(0.01))
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0] // 2],
+                                     initializer=tf.constant_initializer(-3))
+            pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+        else:
+            pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+
+        self.pd = pdtype.pdfromflat(pdparam)
+
+        self.state_in = []
+        self.state_out = []
+
+        # change for BC
+        stochastic = U.get_placeholder(name="stochastic", dtype=tf.bool, shape=())
+        ac = U.switch(stochastic, self.pd.sample(), self.pd.mode())
+        self.ac = ac
+        self._act = U.function([stochastic, ob_config, ob_target, obs_pos], [ac, self.vpred])
+
+    def act(self, stochastic, ob):
+        ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None], ob['obstacle_pos'][None])
+        return ac1[0], vpred1[0]

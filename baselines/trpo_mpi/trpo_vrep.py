@@ -29,7 +29,8 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     rew = 0.0
     true_rew = 0.0
     ob = env.reset()
-
+    episode = 0
+    suc = 0
     cur_ep_ret = 0
     cur_ep_len = 0
     cur_ep_true_ret = 0
@@ -68,6 +69,9 @@ def traj_segment_generator(pi, env, horizon, stochastic):
             ep_rets = []
             ep_true_rets = []
             ep_lens = []
+            print("success rate: {}/{}".format(suc, episode))
+            episode = 0
+            suc = 0
         i = t % horizon
         obs[i] = ob
         vpreds[i] = vpred
@@ -86,6 +90,9 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         cur_ep_true_ret += true_rew
         cur_ep_len += 1
         if new:
+            episode += 1
+            if true_rew > 0.5:
+                suc += 1
             ep_rets.append(cur_ep_ret)
             ep_true_rets.append(cur_ep_true_ret)
             ep_lens.append(cur_ep_len)
@@ -120,7 +127,6 @@ def learn(env, policy_func, rank,
           max_timesteps=0, max_episodes=0, max_iters=0,
           callback=None
           ):
-
     nworkers = MPI.COMM_WORLD.Get_size()
     rank = MPI.COMM_WORLD.Get_rank()
     np.set_printoptions(precision=3)
@@ -133,11 +139,11 @@ def learn(env, policy_func, rank,
     atarg = tf.placeholder(dtype=tf.float32, shape=[None])  # Target advantage function (if applicable)
     ret = tf.placeholder(dtype=tf.float32, shape=[None])  # Empirical return
 
-    #ob = U.get_placeholder_cached(name="ob")
+    # ob = U.get_placeholder_cached(name="ob")
     ob_config = U.get_placeholder_cached(name="ob")
     ob_target = U.get_placeholder_cached(name="goal")
     obs_pos = U.get_placeholder_cached(name="obs_pos")
-    obs_ori = U.get_placeholder_cached(name="obs_ori")
+    # obs_ori = U.get_placeholder_cached(name="obs_ori")
     ac = pi.pdtype.sample_placeholder([None])
 
     kloldnew = oldpi.pd.kl(pi.pd)
@@ -158,8 +164,8 @@ def learn(env, policy_func, rank,
     dist = meankl
 
     all_var_list = pi.get_trainable_variables()
-    var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd") or v.name.startswith("pi/obs")]
-    vf_var_list = [v for v in all_var_list if v.name.startswith("pi/vf") or v.name.startswith("pi/obs")]
+    var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd")]
+    vf_var_list = [v for v in all_var_list if v.name.startswith("pi/vf")]
 
     vfadam = MpiAdam(vf_var_list)
 
@@ -172,17 +178,19 @@ def learn(env, policy_func, rank,
     tangents = []
     for shape in shapes:
         sz = U.intprod(shape)
-        tangents.append(tf.reshape(flat_tangent[start:start+sz], shape))
+        tangents.append(tf.reshape(flat_tangent[start:start + sz], shape))
         start += sz
-    gvp = tf.add_n([tf.reduce_sum(g*tangent) for (g, tangent) in zipsame(klgrads, tangents)])  # pylint: disable=E1111
+    gvp = tf.add_n([tf.reduce_sum(g * tangent) for (g, tangent) in zipsame(klgrads, tangents)])  # pylint: disable=E1111
     fvp = U.flatgrad(gvp, var_list)
 
     assign_old_eq_new = U.function([], [], updates=[tf.assign(oldv, newv)
-                                                    for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
-    compute_losses = U.function([ob_config, ob_target, obs_pos, obs_ori, ac, atarg], losses)
-    compute_lossandgrad = U.function([ob_config, ob_target, obs_pos, obs_ori, ac, atarg], losses + [U.flatgrad(optimgain, var_list)])
-    compute_fvp = U.function([flat_tangent, ob_config, ob_target, obs_pos, obs_ori, ac, atarg], fvp)
-    compute_vflossandgrad = U.function([ob_config, ob_target, obs_pos, obs_ori, ret], U.flatgrad(vferr, vf_var_list))
+                                                    for (oldv, newv) in
+                                                    zipsame(oldpi.get_variables(), pi.get_variables())])
+    compute_losses = U.function([ob_config, ob_target, obs_pos, ac, atarg], losses)
+    compute_lossandgrad = U.function([ob_config, ob_target, obs_pos, ac, atarg],
+                                     losses + [U.flatgrad(optimgain, var_list)])
+    compute_fvp = U.function([flat_tangent, ob_config, ob_target, obs_pos, ac, atarg], fvp)
+    compute_vflossandgrad = U.function([ob_config, ob_target, obs_pos, ret], U.flatgrad(vferr, vf_var_list))
 
     @contextmanager
     def timed(msg):
@@ -265,14 +273,13 @@ def learn(env, policy_func, rank,
             atarg = (atarg - atarg.mean()) / atarg.std()  # standardized advantage function estimate
 
             if hasattr(pi, "ob_rms"): pi.ob_rms.update(ob)  # update running mean/std for policy
-            config, goal, obstacle_pos, obstacle_ori = [], [], [], []
+            config, goal, obstacle_pos = [], [], []
             for o in seg["ob"]:
                 config.append(o["joint"])
                 goal.append(o["target"])
                 obstacle_pos.append(o["obstacle_pos"])
-                obstacle_ori.append(o["obstacle_ori"])
-            config, goal, obstacle_pos, obstacle_ori = map(np.array, [config, goal, obstacle_pos, obstacle_ori])
-            args = config, goal, obstacle_pos, obstacle_ori, seg["ac"], atarg
+            config, goal, obstacle_pos = map(np.array, [config, goal, obstacle_pos])
+            args = config, goal, obstacle_pos, seg["ac"], atarg
             fvpargs = [arr[::5] for arr in args]
 
             assign_old_eq_new()  # set old parameter values to new parameter values
@@ -284,15 +291,9 @@ def learn(env, policy_func, rank,
                 logger.log("Got zero gradient. not updating")
             else:
                 with timed("cg"):
-                    '''stepdir0 = cg(fisher_vector_product, g, cg_iters=15, verbose=rank == 0)
-                    print('iter:10, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
-                        g - compute_fvp(stepdir0, *fvpargs))))'''
                     stepdir = cg(fisher_vector_product, g, cg_iters=cg_iters, verbose=rank == 0)
                     logger.log('iter:{:d}, norm of g: {:.4f}, error of cg: {:.4f}'.format(cg_iters, np.linalg.norm(g), np.linalg.norm(
                         g - compute_fvp(stepdir, *fvpargs))))
-                    '''stepdir2 = cg(fisher_vector_product, g, cg_iters=200, verbose=rank == 0)
-                    print('iter:200, norm of g: {:.4f}, error of cg: {:.4f}'.format(np.linalg.norm(g), np.linalg.norm(
-                        g - compute_fvp(stepdir2, *fvpargs))))'''
                 assert np.isfinite(stepdir).all()
 
                 shs = .5*stepdir.dot(fisher_vector_product(stepdir))
@@ -327,11 +328,11 @@ def learn(env, policy_func, rank,
                     assert all(np.allclose(ps, paramsums[0]) for ps in paramsums[1:])
             with timed("vf"):
                 for _ in range(vf_iters):
-                    for (mbob, mbg, mbop, mboo, mbret) in dataset.iterbatches((config, goal, obstacle_pos, obstacle_ori, seg["tdlamret"]),
+                    for (mbob, mbg, mbop, mbret) in dataset.iterbatches((config, goal, obstacle_pos, seg["tdlamret"]),
                                                              include_final_partial_batch=False, batch_size=128):
                         if hasattr(pi, "ob_rms"):
                             pi.ob_rms.update(mbob)  # update running mean/std for policy
-                        g = allmean(compute_vflossandgrad(mbob, mbg, mbop, mboo, mbret))
+                        g = allmean(compute_vflossandgrad(mbob, mbg, mbop, mbret))
                         vfadam.update(g, vf_stepsize)
 
         g_losses = meanlosses
@@ -366,3 +367,4 @@ def learn(env, policy_func, rank,
 def flatten_lists(listoflists):
     # return a flat array listoflists which is a 2d list
     return [el for list_ in listoflists for el in list_]
+
