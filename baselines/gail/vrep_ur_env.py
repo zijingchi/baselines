@@ -178,7 +178,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         #     level = -0.8
         collision = -1 if self.collision_check else 0
         danger = -0.2 if self.distance < 2e-2 else 0
-        return approach
+        return approach + collision
 
     def step(self, ac):
         ac = np.clip(ac, self.action_space.low, self.action_space.high)
@@ -285,7 +285,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6-self.dof))))
         alpha = 0.5
         obs_pos = alpha*init_tip + (1-alpha)*goal_tip
-        obs_pos += np.concatenate((0.1*np.random.randn(2), np.array([0.1*np.random.rand()+0.21])))
+        obs_pos += np.concatenate((0.2*np.random.randn(2), np.array([0.2*np.random.rand()+0.21])))
         obs_ori = 0.2*np.random.randn(3)
         obs_ori[2] += pi/2
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos'].low,

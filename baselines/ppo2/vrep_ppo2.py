@@ -1,242 +1,291 @@
-'''
-Disclaimer: this code is highly based on trpo_mpi at @openai/baselines and @openai/imitation
-'''
-
-import argparse
-import os.path as osp
-import logging
-from mpi4py import MPI
-from tqdm import tqdm
-from baselines.gail.vrep_ur_env import UR5VrepEnv, PathPlanDset
+import os
+import time
 import numpy as np
-import gym
-
-from baselines.gail import mlp_policy
-from baselines.common import set_global_seeds, tf_util as U
-from baselines.common.misc_util import boolean_flag
-from baselines import bench
+import os.path as osp
 from baselines import logger
-from baselines.gail.adversary import TransitionClassifier4Dict
+from collections import deque
+import datetime
+import gym
+import baselines.common.tf_util as U
+from baselines.gail.vrep_ur_env import UR5VrepEnv
+from baselines.common.distributions import make_pdtype
+from baselines.acktr.utils import dense
+import tensorflow as tf
+from baselines.common import explained_variance, set_global_seeds
+from baselines.common.wrappers import TimeLimit
+from baselines.bench.monitor import Monitor
+from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
+try:
+    from mpi4py import MPI
+except ImportError:
+    MPI = None
+from baselines.ppo2.runner import CustomRunner
 
 
-def argsparser():
-    parser = argparse.ArgumentParser("Tensorflow Implementation of GAIL")
-    parser.add_argument('--env_id', help='environment ID', default='VREP-UR')
-    parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='/home/ubuntu/vdp/5_2/')
-    parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
-    parser.add_argument('--log_dir', help='the directory to save log file', default='log')
-    parser.add_argument('--load_model_path', help='if provided, load the model', type=str, default=None)
-    # Task
-    parser.add_argument('--task', type=str, choices=['train', 'evaluate', 'sample'], default='train')
-    # for evaluatation
-    boolean_flag(parser, 'stochastic_policy', default=True, help='use stochastic/deterministic policy to evaluate')
-    boolean_flag(parser, 'save_sample', default=False, help='save the trajectories or not')
-    #  Mujoco Dataset Configuration
-    parser.add_argument('--traj_limitation', type=int, default=-1)
-    # Optimization Configuration
-    parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
-    parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
-    # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=200)
-    parser.add_argument('--adversary_hidden_size', type=int, default=100)
-    # Algorithms Configuration
-    parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
-    parser.add_argument('--max_kl', type=float, default=0.01)
-    parser.add_argument('--policy_entcoeff', help='entropy coefficiency of policy', type=float, default=1e-3)
-    parser.add_argument('--adversary_entcoeff', help='entropy coefficiency of discriminator', type=float, default=1e-3)
-    # Traing Configuration
-    parser.add_argument('--save_per_iter', help='save model every xx iterations', type=int, default=100)
-    parser.add_argument('--num_timesteps', help='number of timesteps per episode', type=int, default=2e5)
-    # Behavior Cloning
-    boolean_flag(parser, 'pretrained', default=True, help='Use BC to pretrain')
-    parser.add_argument('--BC_max_iter', help='Max iteration for training BC', type=int, default=4e3)
-    return parser.parse_args()
+def constfn(val):
+    def f(_):
+        return val
+    return f
 
 
-def get_task_name(args):
-    task_name = args.algo + "_gail."
-    if args.pretrained:
-        task_name += "with_pretrained."
-    if args.traj_limitation != np.inf:
-        task_name += "transition_limitation_%d." % args.traj_limitation
-    task_name += args.env_id.split("-")[0]
-    task_name = task_name + ".g_step_" + str(args.g_step) + ".d_step_" + str(args.d_step) + \
-        ".policy_entcoeff_" + str(args.policy_entcoeff) + ".adversary_entcoeff_" + str(args.adversary_entcoeff)
-    task_name += ".seed_" + str(args.seed)
-    return task_name
+def build_policy(ob_space, ac_space, hid_size, num_hid_layers):
+    def polc(nbatch=None, nsteps=None, sess=None):
+        return PolicyBuilder(nbatch, ob_space, ac_space, hid_size, num_hid_layers, sess)
+    return polc
 
 
-def main(args):
-    U.make_session(num_cpu=1).__enter__()
-    set_global_seeds(args.seed)
+def learn(env, total_timesteps, eval_env=None, seed=None, nsteps=512, ent_coef=0.0, lr=3e-4,
+          vf_coef=0.5, max_grad_norm=0.5, gamma=0.99, lam=0.95, num_hidden=100, num_layers=3,
+          log_interval=2, nminibatches=4, noptepochs=4, cliprange=0.2,
+          save_interval=0, load_path=None, model_fn=None, update_fn=None, init_fn=None, mpi_rank_weight=1,
+          comm=None):
+    set_global_seeds(seed)
 
-    env = UR5VrepEnv(obs_space_type='dict')
-    from baselines.common.wrappers import TimeLimit
-    env = TimeLimit(env, max_episode_steps=100)
-    def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
-                                    reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
-    env = bench.Monitor(env, logger.get_dir() and
-                        osp.join(logger.get_dir(), "monitor.json"))
-    env.seed(args.seed)
-    gym.logger.setLevel(logging.WARN)
-    task_name = get_task_name(args)
-    args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
-    args.log_dir = osp.join(args.log_dir, task_name)
-
-    if args.task == 'train':
-        dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
-        reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=3,
-                                                 ob_shape=16, entcoeff=args.adversary_entcoeff)
-        train(env,
-              args.seed,
-              policy_fn,
-              reward_giver,
-              dataset,
-              args.algo,
-              args.g_step,
-              args.d_step,
-              args.policy_entcoeff,
-              args.num_timesteps,
-              args.save_per_iter,
-              args.checkpoint_dir,
-              args.log_dir,
-              args.pretrained,
-              args.BC_max_iter,
-              task_name
-              )
-    elif args.task == 'evaluate':
-        runner(env,
-               policy_fn,
-               args.load_model_path,
-               timesteps_per_batch=100,
-               number_trajs=30,
-               stochastic_policy=args.stochastic_policy,
-               save=args.save_sample
-               )
+    if isinstance(lr, float):
+        lr = constfn(lr)
     else:
-        raise NotImplementedError
+        assert callable(lr)
+    if isinstance(cliprange, float):
+        cliprange = constfn(cliprange)
+    else:
+        assert callable(cliprange)
+    total_timesteps = int(total_timesteps)
+    nenvs = 1
+    nbatch = nenvs * nsteps
+    nbatch_train = nbatch // nminibatches
+    is_mpi_root = (MPI is None or MPI.COMM_WORLD.Get_rank() == 0)
+    ob_space = env.observation_space
+    ac_space = env.action_space
+    # Instantiate the model object (that creates act_model and train_model)
+    if model_fn is None:
+        from baselines.ppo2.model import CustomModel
+        model_fn = CustomModel
+    policy = build_policy(ob_space, ac_space, num_hidden, num_layers)
+    model = model_fn(policy=policy, nbatch_act=nenvs, nbatch_train=nbatch_train,
+                     nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
+                     max_grad_norm=max_grad_norm, comm=comm, mpi_rank_weight=mpi_rank_weight)
+    if load_path is not None:
+        model.load(load_path)
+    # Instantiate the runner object
+    runner = CustomRunner(env=env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
+    if eval_env is not None:
+        eval_runner = CustomRunner(env=eval_env, model=model, nsteps=nsteps, gamma=gamma, lam=lam)
+
+    epinfobuf = deque(maxlen=100)
+    if eval_env is not None:
+        eval_epinfobuf = deque(maxlen=100)
+
+    if init_fn is not None:
+        init_fn()
+
+    # Start total timer
+    tfirststart = time.perf_counter()
+
+    nupdates = total_timesteps // nbatch
+    for update in range(1, nupdates + 1):
+        print('{}/{}'.format(update, nupdates))
+        assert nbatch % nminibatches == 0
+        # Start timer
+        tstart = time.perf_counter()
+        frac = 1.0 - (update - 1.0) / nupdates
+        # Calculate the learning rate
+        lrnow = lr(frac)
+        # Calculate the cliprange
+        cliprangenow = cliprange(frac)
+
+        if update % log_interval == 0 and is_mpi_root: logger.info('Stepping environment...')
+
+        # Get minibatch
+        obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run()  # pylint: disable=E0632
+        if eval_env is not None:
+            eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run()  # pylint: disable=E0632
+
+        if update % log_interval == 0 and is_mpi_root: logger.info('Done.')
+
+        epinfobuf.extend(epinfos)
+        if eval_env is not None:
+            eval_epinfobuf.extend(eval_epinfos)
+
+        # Here what we're going to do is for each minibatch calculate the loss and append it.
+        mblossvals = []
+        if states is None:  # nonrecurrent version
+            # Index of each element of batch_size
+            # Create the indices array
+            inds = np.arange(nbatch)
+            for _ in range(noptepochs):
+                # Randomize the indexes
+                np.random.shuffle(inds)
+                # 0 to batch_size with batch_train_size step
+                for start in range(0, nbatch, nbatch_train):
+                    end = start + nbatch_train
+                    mbinds = inds[start:end]
+                    slices = (arr[mbinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
+                    mblossvals.append(model.train(lrnow, cliprangenow, *slices))
+        else:  # recurrent version
+            assert nenvs % nminibatches == 0
+            envsperbatch = nenvs // nminibatches
+            envinds = np.arange(nenvs)
+            flatinds = np.arange(nenvs * nsteps).reshape(nenvs, nsteps)
+            for _ in range(noptepochs):
+                np.random.shuffle(envinds)
+                for start in range(0, nenvs, envsperbatch):
+                    end = start + envsperbatch
+                    mbenvinds = envinds[start:end]
+                    mbflatinds = flatinds[mbenvinds].ravel()
+                    slices = (arr[mbflatinds] for arr in (obs, returns, masks, actions, values, neglogpacs))
+                    mbstates = states[mbenvinds]
+                    mblossvals.append(model.train(lrnow, cliprangenow, *slices, mbstates))
+
+        # Feedforward --> get losses --> update
+        lossvals = np.mean(mblossvals, axis=0)
+        # End timer
+        tnow = time.perf_counter()
+        # Calculate the fps (frame per second)
+        fps = int(nbatch / (tnow - tstart))
+
+        if update_fn is not None:
+            update_fn(update)
+
+        if update % log_interval == 0 or update == 1:
+            # Calculates if value function is a good predicator of the returns (ev > 1)
+            # or if it's just worse than predicting nothing (ev =< 0)
+            ev = explained_variance(values, returns)
+            logger.logkv("misc/serial_timesteps", update * nsteps)
+            logger.logkv("misc/nupdates", update)
+            logger.logkv("misc/total_timesteps", update * nbatch)
+            logger.logkv("fps", fps)
+            logger.logkv("misc/explained_variance", float(ev))
+            logger.logkv('eprewmean', safemean([epinfo['r'] for epinfo in epinfobuf]))
+            logger.logkv('eplenmean', safemean([epinfo['l'] for epinfo in epinfobuf]))
+            if eval_env is not None:
+                logger.logkv('eval_eprewmean', safemean([epinfo['r'] for epinfo in eval_epinfobuf]))
+                logger.logkv('eval_eplenmean', safemean([epinfo['l'] for epinfo in eval_epinfobuf]))
+            logger.logkv('misc/time_elapsed', tnow - tfirststart)
+            for (lossval, lossname) in zip(lossvals, model.loss_names):
+                logger.logkv('loss/' + lossname, lossval)
+
+            logger.dumpkvs()
+        if save_interval and (update % save_interval == 0 or update == 1) and logger.get_dir() and is_mpi_root:
+            checkdir = osp.join(logger.get_dir(), 'checkpoints')
+            os.makedirs(checkdir, exist_ok=True)
+            savepath = osp.join(checkdir, '%.5i' % update)
+            print('Saving to', savepath)
+            model.save(savepath)
+
+    return model
+
+
+# Avoid division error when calculate the mean (in our case if epinfo is empty returns np.nan, not return an error)
+def safemean(xs):
+    return np.nan if len(xs) == 0 else np.mean(xs)
+
+
+class PolicyBuilder(object):
+
+    def __init__(self, n_batch, ob_space, ac_space, hid_size, num_hid_layers, sess=None, gaussian_fixed_var=True):
+        sequence_length = n_batch
+        self.sess = sess or tf.get_default_session()
+        self.ob_config = tf.placeholder(name="ob", dtype=tf.float32,
+                                   shape=[sequence_length] + list(ob_space.spaces['joint'].shape))
+        self.ob_target = tf.placeholder(name="goal", dtype=tf.float32,
+                                      shape=[sequence_length] + list(ob_space.spaces['target'].shape))
+
+        self.obs_pos = tf.placeholder(name="obs_pos", dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos'].shape))
+        self.pdtype = pdtype = make_pdtype(ac_space)
+
+        last_out = self.ob_config
+        goal_last_out = self.ob_target
+        obs_last_out = self.obs_pos
+
+        for i in range(num_hid_layers):
+            last_out = dense(last_out, hid_size, "vfcfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                             weight_loss_dict={})
+            # last_out = tf.layers.batch_normalization(last_out, training=is_training, name="vfcbn%i"%(i+1))
+            last_out = tf.nn.tanh(last_out)
+            goal_last_out = dense(goal_last_out, hid_size, "vfgfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                  weight_loss_dict={})
+            goal_last_out = tf.nn.tanh(goal_last_out)
+            obs_last_out = dense(obs_last_out, hid_size, "vfobsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                 weight_loss_dict={})
+            # obs_last_out = tf.layers.batch_normalization(obs_last_out, training=is_training, name="vfobn%i"%(i+1))
+            obs_last_out = tf.nn.tanh(obs_last_out)
+        vpred = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        vpred = dense(vpred, 1, "vffinal", weight_init=U.normc_initializer(1.0))
+        self.vf = vpred[:, 0]
+        # construct policy probability distribution model
+        last_out = self.ob_config
+        goal_last_out = self.ob_target
+        obs_last_out = self.obs_pos
+
+        for i in range(num_hid_layers):
+            last_out = dense(last_out, hid_size, "pol_cfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                             weight_loss_dict={})
+            last_out = tf.nn.tanh(last_out)
+            goal_last_out = dense(goal_last_out, hid_size, "pol_gfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                  weight_loss_dict={})
+            goal_last_out = tf.nn.tanh(goal_last_out)
+            obs_last_out = dense(obs_last_out, hid_size, "pol_obsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                 weight_loss_dict={})
+            obs_last_out = tf.nn.tanh(obs_last_out)
+        last_out = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
+            mean = dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.constant_initializer(-3))
+            pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+        else:
+            pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+        #self.pdparam = pdparam
+        self.pd = pdtype.pdfromflat(pdparam)
+        self.action = self.pd.sample()
+        self.initial_state = None
+        self.state = tf.constant([])
+        self.neglogp = self.pd.neglogp(self.action)
+        self._act = U.function([self.ob_config, self.ob_target, self.obs_pos], [self.action, self.vf, self.state, self.neglogp])
+
+    def step(self, ob_config, ob_target, obs_pos):
+        a, v, state, neglop = self._act(ob_config, ob_target, obs_pos)
+        if state.size == 0:
+            state = None
+        return a, v, state, neglop
+
+    def value(self, ob_config, ob_target, obs_pos):
+        _, v, _, _ = self.step(ob_config, ob_target, obs_pos)
+        return v
+
+    def save(self, save_path):
+        U.save_state(save_path, sess=self.sess)
+
+    def load(self, load_path):
+        U.load_state(load_path, sess=self.sess)
+
+
+def main():
+    if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
+        rank = 0
+        logger.configure(osp.join('logdir', datetime.datetime.now().__str__()))
+    else:
+        logger.configure(format_strs=[])
+        rank = MPI.COMM_WORLD.Get_rank()
+
+    #env = UR5VrepEnv(server_port=19997)
+    #env = Monitor(TimeLimit(env, max_episode_steps=100), logger.get_dir() and
+    #              osp.join(logger.get_dir(), "monitor.json"))
+
+    def env_fn():
+        env = UR5VrepEnv(server_port=19997)
+        env = Monitor(TimeLimit(env, max_episode_steps=100), logger.get_dir() and
+                      osp.join(logger.get_dir(), "monitor.json"))
+        return env
+
+    env = DummyVecEnv([env_fn])
+    model = learn(env, 2e6, ent_coef=0.0, lr=3e-4, vf_coef=0.5,  max_grad_norm=0.5, cliprange=0.2)
+    save_path = './cpt'
+    if save_path is not None and rank == 0:
+        save_path = osp.expanduser(save_path)
+        model.save(save_path)
     env.close()
 
 
-def train(env, seed, policy_fn, reward_giver, dataset, algo,
-          g_step, d_step, policy_entcoeff, num_timesteps, save_per_iter,
-          checkpoint_dir, log_dir, pretrained, BC_max_iter, task_name=None):
-
-    pretrained_weight = None
-    if pretrained and (BC_max_iter > 0):
-        # Pretrain with behavior cloning
-        from baselines.gail import behavior_clone_vrep
-        pretrained_weight = behavior_clone_vrep.learn(env, policy_fn, dataset,
-                                                      max_iters=BC_max_iter, ckpt_dir='checkpoint/BC', verbose=True)
-    #path = 'trpo_gail.with_pretrained.transition_limitation_-1.HalfCheetah.g_step_3.d_step_2.policy_entcoeff_0.001.adversary_entcoeff_0.001.seed_0'
-    #pretrained_weight = "checkpoint/" + path
-    if algo == 'trpo':
-        from baselines.gail import trpo_mpi4vrep
-        # Set up for MPI seed
-        rank = MPI.COMM_WORLD.Get_rank()
-        if rank != 0:
-            logger.set_level(logger.DISABLED)
-        workerseed = seed + 10000 * MPI.COMM_WORLD.Get_rank()
-        set_global_seeds(workerseed)
-        env.seed(workerseed)
-        trpo_mpi4vrep.learn(env, policy_fn, reward_giver, dataset, rank,
-                            pretrained=pretrained, pretrained_weight=pretrained_weight,
-                            g_step=g_step, d_step=d_step,
-                            entcoeff=policy_entcoeff,
-                            max_timesteps=num_timesteps,
-                            ckpt_dir=checkpoint_dir, log_dir=log_dir,
-                            save_per_iter=save_per_iter,
-                            timesteps_per_batch=512,
-                            max_kl=0.04, cg_iters=80, cg_damping=0.1,
-                            gamma=0.995, lam=0.97,
-                            vf_iters=5, vf_stepsize=1e-3,
-                            task_name=task_name)
-    else:
-        raise NotImplementedError
-
-
-def runner(env, policy_func, load_model_path, timesteps_per_batch, number_trajs,
-           stochastic_policy, save=False, reuse=False):
-
-    # Setup network
-    # ----------------------------------------
-    ob_space = env.observation_space
-    ac_space = env.action_space
-    pi = policy_func("pi", ob_space, ac_space, reuse=reuse)
-    U.initialize()
-    # Prepare for rollouts
-    # ----------------------------------------
-    U.load_state(load_model_path)
-
-    obs_list = []
-    acs_list = []
-    len_list = []
-    ret_list = []
-    for _ in tqdm(range(number_trajs)):
-        traj = traj_1_generator(pi, env, timesteps_per_batch, stochastic=stochastic_policy)
-        obs, acs, ep_len, ep_ret = traj['ob'], traj['ac'], traj['ep_len'], traj['ep_ret']
-        obs_list.append(obs)
-        acs_list.append(acs)
-        len_list.append(ep_len)
-        ret_list.append(ep_ret)
-    if stochastic_policy:
-        print('stochastic policy:')
-    else:
-        print('deterministic policy:')
-    if save:
-        filename = load_model_path.split('/')[-1] + '.' + env.spec.id
-        np.savez(filename, obs=np.array(obs_list), acs=np.array(acs_list),
-                 lens=np.array(len_list), rets=np.array(ret_list))
-    avg_len = sum(len_list)/len(len_list)
-    avg_ret = sum(ret_list)/len(ret_list)
-    print("Average length:", avg_len)
-    print("Average return:", avg_ret)
-    return avg_len, avg_ret
-
-
-# Sample one trajectory (until trajectory end)
-def traj_1_generator(pi, env, horizon, stochastic):
-
-    t = 0
-    ac = env.action_space.sample()  # not used, just so we have the datatype
-    new = True  # marks if we're on first timestep of an episode
-
-    ob = env.reset()
-    cur_ep_ret = 0  # return in current episode
-    cur_ep_len = 0  # len of current episode
-
-    # Initialize history arrays
-    obs = []
-    rews = []
-    news = []
-    acs = []
-
-    while True:
-        ac, vpred = pi.act(stochastic, ob)
-        obs.append(ob)
-        news.append(new)
-        acs.append(ac)
-
-        ob, rew, new, _ = env.step(ac)
-        rews.append(rew)
-
-        cur_ep_ret += rew
-        cur_ep_len += 1
-        if new or t >= horizon:
-            break
-        t += 1
-
-    obs = np.array(obs)
-    rews = np.array(rews)
-    news = np.array(news)
-    acs = np.array(acs)
-    traj = {"ob": obs, "rew": rews, "new": news, "ac": acs,
-            "ep_ret": cur_ep_ret, "ep_len": cur_ep_len}
-    return traj
-
-
 if __name__ == '__main__':
-    args = argsparser()
-    main(args)
+    main()

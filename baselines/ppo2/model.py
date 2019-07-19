@@ -24,7 +24,7 @@ class Model(object):
     save/load():
     - Save load the model
     """
-    def __init__(self, *, policy, ob_space, ac_space, nbatch_act, nbatch_train,
+    def __init__(self, *, policy, nbatch_act, nbatch_train,
                 nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None):
         self.sess = sess = get_session()
 
@@ -157,3 +157,37 @@ class Model(object):
             td_map
         )[:-1]
 
+
+class CustomModel(Model):
+    def __init__(self, *, policy, nbatch_act, nbatch_train,
+                nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None):
+        super(CustomModel, self).__init__(policy=policy, nbatch_act=nbatch_act, nbatch_train=nbatch_train,
+                                          nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
+                                          max_grad_norm=max_grad_norm, mpi_rank_weight=mpi_rank_weight, comm=comm,
+                                          microbatch_size=microbatch_size)
+
+    def train(self, lr, cliprange, obs, returns, masks, actions, values, neglogpacs, states=None):
+        advs = returns - values
+
+        # Normalize the advantages
+        advs = (advs - advs.mean()) / (advs.std() + 1e-8)
+        td_map = {
+            self.train_model.ob_config: obs[:, :5],
+            self.train_model.ob_target: obs[:, 5:10],
+            self.train_model.obs_pos: obs[:, -3:],
+            self.A: actions,
+            self.ADV: advs,
+            self.R: returns,
+            self.LR: lr,
+            self.CLIPRANGE: cliprange,
+            self.OLDNEGLOGPAC: neglogpacs,
+            self.OLDVPRED: values
+        }
+        if states is not None:
+            td_map[self.train_model.S] = states
+            td_map[self.train_model.M] = masks
+
+        return self.sess.run(
+            self.stats_list + [self._train_op],
+            td_map
+        )[:-1]
