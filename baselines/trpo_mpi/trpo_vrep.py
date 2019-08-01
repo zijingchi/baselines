@@ -137,7 +137,7 @@ def learn(env, policy_func, rank,
     ob_config = U.get_placeholder_cached(name="ob")
     ob_target = U.get_placeholder_cached(name="goal")
     obs_pos = U.get_placeholder_cached(name="obs_pos")
-    #obs_ori = U.get_placeholder_cached(name="obs_ori")
+    obs_pos2 = U.get_placeholder_cached(name="obs_pos2")
     ac = pi.pdtype.sample_placeholder([None])
 
     kloldnew = oldpi.pd.kl(pi.pd)
@@ -158,8 +158,8 @@ def learn(env, policy_func, rank,
     dist = meankl
 
     all_var_list = pi.get_trainable_variables()
-    var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd")]
-    vf_var_list = [v for v in all_var_list if v.name.startswith("pi/vf")]
+    var_list = [v for v in all_var_list if v.name.startswith("pi/pol") or v.name.startswith("pi/logstd") or v.name.startswith("pi/obs")]
+    vf_var_list = [v for v in all_var_list if v.name.startswith("pi/vf") or v.name.startswith("pi/obs")]
 
     vfadam = MpiAdam(vf_var_list)
 
@@ -179,10 +179,10 @@ def learn(env, policy_func, rank,
 
     assign_old_eq_new = U.function([], [], updates=[tf.assign(oldv, newv)
                                                     for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
-    compute_losses = U.function([ob_config, ob_target, obs_pos, ac, atarg], losses)
-    compute_lossandgrad = U.function([ob_config, ob_target, obs_pos, ac, atarg], losses + [U.flatgrad(optimgain, var_list)])
-    compute_fvp = U.function([flat_tangent, ob_config, ob_target, obs_pos, ac, atarg], fvp)
-    compute_vflossandgrad = U.function([ob_config, ob_target, obs_pos, ret], U.flatgrad(vferr, vf_var_list))
+    compute_losses = U.function([ob_config, ob_target, obs_pos, obs_pos2, ac, atarg], losses)
+    compute_lossandgrad = U.function([ob_config, ob_target, obs_pos, obs_pos2, ac, atarg], losses + [U.flatgrad(optimgain, var_list)])
+    compute_fvp = U.function([flat_tangent, ob_config, ob_target, obs_pos, obs_pos2, ac, atarg], fvp)
+    compute_vflossandgrad = U.function([ob_config, ob_target, obs_pos, obs_pos2, ret], U.flatgrad(vferr, vf_var_list))
 
     @contextmanager
     def timed(msg):
@@ -265,13 +265,14 @@ def learn(env, policy_func, rank,
             atarg = (atarg - atarg.mean()) / atarg.std()  # standardized advantage function estimate
 
             if hasattr(pi, "ob_rms"): pi.ob_rms.update(ob)  # update running mean/std for policy
-            config, goal, obstacle_pos = [], [], []
+            config, goal, obstacle_pos, obstacle_pos2 = [], [], [], []
             for o in seg["ob"]:
                 config.append(o["joint"])
                 goal.append(o["target"])
-                obstacle_pos.append(o["obstacle_pos"])
-            config, goal, obstacle_pos, = map(np.array, [config, goal, obstacle_pos])
-            args = config, goal, obstacle_pos, seg["ac"], atarg
+                obstacle_pos.append(o["obstacle_pos1"])
+                obstacle_pos2.append(o["obstacle_pos2"])
+            config, goal, obstacle_pos, obstacle_pos2 = map(np.array, [config, goal, obstacle_pos, obstacle_pos2])
+            args = config, goal, obstacle_pos, obstacle_pos2, seg["ac"], atarg
             fvpargs = [arr[::5] for arr in args]
 
             assign_old_eq_new()  # set old parameter values to new parameter values
@@ -320,11 +321,11 @@ def learn(env, policy_func, rank,
                     assert all(np.allclose(ps, paramsums[0]) for ps in paramsums[1:])
             with timed("vf"):
                 for _ in range(vf_iters):
-                    for (mbob, mbg, mbop, mbret) in dataset.iterbatches((config, goal, obstacle_pos, seg["tdlamret"]),
+                    for (mbob, mbg, mbop, mbop2, mbret) in dataset.iterbatches((config, goal, obstacle_pos, obstacle_pos2, seg["tdlamret"]),
                                                              include_final_partial_batch=False, batch_size=128):
                         if hasattr(pi, "ob_rms"):
                             pi.ob_rms.update(mbob)  # update running mean/std for policy
-                        g = allmean(compute_vflossandgrad(mbob, mbg, mbop, mbret))
+                        g = allmean(compute_vflossandgrad(mbob, mbg, mbop, mbop2, mbret))
                         vfadam.update(g, vf_stepsize)
 
         g_losses = meanlosses

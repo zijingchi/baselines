@@ -112,6 +112,31 @@ class DiagGaussianPdType(PdType):
     def sample_dtype(self):
         return tf.float32
 
+class MultiDiagGaussianPdType(PdType):
+    def __init__(self, size, n_mix):
+        self.size = size
+        self.n_mix = n_mix
+
+    def pdclass(self):
+        return MultiDiagGaussianPd
+
+    def pdfromlatent(self, latent_vector, init_scale=1.0, init_bias=0.0):
+        means = _matching_fc(latent_vector, 'pi', self.size*self.n_mix, init_scale=init_scale, init_bias=init_bias)
+        allmean = tf.split(axis=len(means.shape)-1, num_or_size_splits=self.n_mix, value=means)
+        logstds = tf.get_variable(name='pi/logstd_all', shape=[1, self.size*self.n_mix], initializer=tf.zeros_initializer())
+        alllogstd = tf.split(axis=len(logstds.shape)-1, num_or_size_splits=self.n_mix, value=logstds)
+        pdparam = [allmean, alllogstd]
+        return self.pdfromflat(pdparam), allmean
+
+    def param_shape(self):
+        return [2*self.size*self.n_mix]
+
+    def sample_shape(self):
+        return [self.size]
+
+    def sample_dtype(self):
+        return tf.float32
+
 class BernoulliPdType(PdType):
     def __init__(self, size):
         self.size = size
@@ -250,6 +275,19 @@ class DiagGaussianPd(Pd):
     def fromflat(cls, flat):
         return cls(flat)
 
+class MultiDiagGaussianPd(Pd):
+    def __init__(self, flat):
+        self.flat = flat
+        assert len(flat[0])==len(flat[1])
+        self.means = flat[0]
+        self.logstds = flat[1]
+        self.n_mix = len(flat[0])
+        self.std = [tf.exp(tt) for tt in self.logstds]
+
+    def flatparam(self):
+        return self.flat
+    def mode(self):
+        return self.means
 
 class BernoulliPd(Pd):
     def __init__(self, logits):

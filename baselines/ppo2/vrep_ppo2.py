@@ -274,12 +274,13 @@ def main():
 
     def env_fn():
         env = UR5VrepEnv(server_port=19997)
-        env = Monitor(TimeLimit(env, max_episode_steps=100), logger.get_dir() and
+        env = Monitor(TimeLimit(env, max_episode_steps=80), logger.get_dir() and
                       osp.join(logger.get_dir(), "monitor.json"))
         return env
 
     env = DummyVecEnv([env_fn])
-    model = learn(env, 2e6, ent_coef=0.0, lr=3e-4, vf_coef=0.5,  max_grad_norm=0.5, cliprange=0.2)
+    model = learn(env, 1e6, ent_coef=0.0, lr=8e-4, vf_coef=0.8,  max_grad_norm=1.2, cliprange=0.4, save_interval=4,
+                  num_hidden=160, nsteps=1000)
     save_path = './cpt'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)

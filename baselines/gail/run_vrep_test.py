@@ -7,7 +7,7 @@ import os.path as osp
 import logging
 from mpi4py import MPI
 from tqdm import tqdm
-from baselines.gail.vrep_ur_env import UR5VrepEnv, PathPlanDset
+from baselines.gail.vrep_ur_env import UR5VrepEnv, UR5VrepEnvMultiObstacle
 import numpy as np
 import gym
 
@@ -38,8 +38,8 @@ def argsparser():
     parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
     parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
     # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=100)
-    parser.add_argument('--adversary_hidden_size', type=int, default=128)
+    parser.add_argument('--policy_hidden_size', type=int, default=256)
+    parser.add_argument('--adversary_hidden_size', type=int, default=256)
     # Algorithms Configuration
     parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
     parser.add_argument('--max_kl', type=float, default=0.02)
@@ -70,12 +70,13 @@ def get_task_name(args):
 def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = UR5VrepEnv(obs_space_type='dict')
+    env = UR5VrepEnvMultiObstacle(obs_space_type='dict', l2_thresh=0.06)
     from baselines.common.wrappers import TimeLimit
     env = TimeLimit(env, max_episode_steps=100)
+
     def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MLPD(name=name, ob_space=ob_space, ac_space=ac_space,
-                                    reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
+        return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
+                               reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
     env = bench.Monitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
     env.seed(args.seed)
@@ -151,7 +152,7 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                         max_timesteps=num_timesteps,
                         ckpt_dir=checkpoint_dir, log_dir=log_dir,
                         save_per_iter=save_per_iter,
-                        timesteps_per_batch=512,
+                        timesteps_per_batch=768,
                         max_kl=0.01, cg_iters=30, cg_damping=0.5,
                         gamma=0.995, lam=0.97,
                         vf_iters=5, vf_stepsize=1e-2,

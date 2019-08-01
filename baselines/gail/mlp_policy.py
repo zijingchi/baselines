@@ -94,10 +94,10 @@ class MlpPolicy4Dict(object):
 
         ob_config = U.get_placeholder(name="ob", dtype=tf.float32, shape=[sequence_length] + list(ob_space.spaces['joint'].shape))
         ob_target = U.get_placeholder(name="goal", dtype=tf.float32, shape=[sequence_length] + list(ob_space.spaces['target'].shape))
-        obs_pos = U.get_placeholder(name="obs_pos", dtype=tf.float32,
-                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos'].shape))
-        obs_ori = U.get_placeholder(name="obs_ori", dtype=tf.float32,
-                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_ori'].shape))
+        obs_pos1 = U.get_placeholder(name="obs_pos", dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos1'].shape))
+        obs_pos2 = U.get_placeholder(name="obs_pos2", dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos2'].shape))
         # construct v function model
         '''with tf.variable_scope("obfilter"):
             self.ob_rms = RunningMeanStd(shape=ob_space['joint'].shape)
@@ -107,15 +107,15 @@ class MlpPolicy4Dict(object):
         goal_last_out = tf.clip_by_value((ob_target - self.ob_rms.mean) / self.ob_rms.std, -5.0, 5.0)'''
         last_out = ob_config
         goal_last_out = ob_target
-        op_last_out = dense(obs_pos, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0),
+        '''op_last_out = dense(obs_pos1, hid_size, "obs_pos_pre", weight_init=U.normc_initializer(1.0),
                             weight_loss_dict={})
-        oo_last_out = dense(obs_ori, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0),
+        oo_last_out = dense(obs_pos2, hid_size, "obs_ori_pre", weight_init=U.normc_initializer(1.0),
                             weight_loss_dict={})
-        op_last_out = tf.layers.batch_normalization(op_last_out, training=True, name="obs_pos_bn")
-        oo_last_out = tf.layers.batch_normalization(oo_last_out, training=True, name="obs_ori_bn")
+        #op_last_out = tf.layers.batch_normalization(op_last_out, training=True, name="obs_pos_bn")
+        #oo_last_out = tf.layers.batch_normalization(oo_last_out, training=True, name="obs_ori_bn")
         op_last_out = tf.nn.tanh(op_last_out)
-        oo_last_out = tf.nn.tanh(oo_last_out)
-        obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
+        oo_last_out = tf.nn.tanh(oo_last_out)'''
+        obs_last_out = tf.concat([obs_pos1, obs_pos2], axis=-1)
         for i in range(num_hid_layers):
             last_out = tf.nn.tanh(dense(last_out, hid_size, "vfcfc%i" % (i+1), weight_init=U.normc_initializer(1.0),
                                               weight_loss_dict={}))
@@ -129,7 +129,7 @@ class MlpPolicy4Dict(object):
         # construct policy probability distribution model
         last_out = ob_config
         goal_last_out = ob_target
-        obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
+        obs_last_out = tf.concat([obs_pos1, obs_pos2], axis=-1)
 
         for i in range(num_hid_layers):
             last_out = tf.nn.tanh(dense(last_out, hid_size, "pol_cfg_fc%i" % (i+1), weight_init=U.normc_initializer(1.0),
@@ -157,11 +157,11 @@ class MlpPolicy4Dict(object):
         stochastic = U.get_placeholder(name="stochastic", dtype=tf.bool, shape=())
         ac = U.switch(stochastic, self.pd.sample(), self.pd.mode())
         self.ac = ac
-        self._act = U.function([stochastic, ob_config, ob_target, obs_pos, obs_ori], [ac, self.vpred])
+        self._act = U.function([stochastic, ob_config, ob_target, obs_pos1, obs_pos2], [ac, self.vpred])
 
     def act(self, stochastic, ob):
         ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None],
-                                ob['obstacle_pos'][None], ob['obstacle_ori'][None])
+                                ob['obstacle_pos1'][None], ob['obstacle_pos2'][None])
         return ac1[0], vpred1[0]
 
     def get_variables(self):
