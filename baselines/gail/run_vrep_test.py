@@ -23,7 +23,7 @@ def argsparser():
     parser = argparse.ArgumentParser("Tensorflow Implementation of GAIL")
     parser.add_argument('--env_id', help='environment ID', default='VREP-UR')
     parser.add_argument('--seed', help='RNG seed', type=int, default=0)
-    parser.add_argument('--expert_path', type=str, default='/home/ubuntu/vdp/5_2/')
+    parser.add_argument('--expert_path', type=str, default='dataset/ur5expert1')
     parser.add_argument('--checkpoint_dir', help='the directory to save model', default='checkpoint')
     parser.add_argument('--log_dir', help='the directory to save log file', default='log')
     parser.add_argument('--load_model_path', help='if provided, load the model', type=str, default=None)
@@ -38,8 +38,8 @@ def argsparser():
     parser.add_argument('--g_step', help='number of steps to train policy in each epoch', type=int, default=3)
     parser.add_argument('--d_step', help='number of steps to train discriminator in each epoch', type=int, default=2)
     # Network Configuration (Using MLP Policy)
-    parser.add_argument('--policy_hidden_size', type=int, default=100)
-    parser.add_argument('--adversary_hidden_size', type=int, default=128)
+    parser.add_argument('--policy_hidden_size', type=int, default=256)
+    parser.add_argument('--adversary_hidden_size', type=int, default=256)
     # Algorithms Configuration
     parser.add_argument('--algo', type=str, choices=['trpo', 'ppo'], default='trpo')
     parser.add_argument('--max_kl', type=float, default=0.01)
@@ -70,7 +70,7 @@ def get_task_name(args):
 def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = UR5VrepEnv(obs_space_type='dict')
+    env = UR5VrepEnv(obs_space_type='dict', dof=5, random_seed=1, enable_cameras=False, l2_thresh=0.06)
     from baselines.common.wrappers import TimeLimit
     env = TimeLimit(env, max_episode_steps=100)
 
@@ -83,14 +83,14 @@ def main(args):
     env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
     # task_name = get_task_name(args)
-    task_name = "UR5PathPlanTRPO2"
+    task_name = "UR5PathPlanTRPO6"
     args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
     args.log_dir = osp.join(args.log_dir, task_name)
 
     if args.task == 'train':
-        # dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
+        #dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
         dataset = {}
-        # reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=3,
+        #reward_giver = TransitionClassifier4Dict(env, args.adversary_hidden_size, hidden_layers=3,
         #                                        ob_shape=16, entcoeff=args.adversary_entcoeff)
         reward_giver = {}
         train(env,
@@ -136,6 +136,7 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                                                       max_iters=BC_max_iter, ckpt_dir='checkpoint/BC', verbose=True)
     #path = 'trpo_gail.with_pretrained.transition_limitation_-1.HalfCheetah.g_step_3.d_step_2.policy_entcoeff_0.001.adversary_entcoeff_0.001.seed_0'
     #pretrained_weight = "checkpoint/" + path
+    pretrained_weight = '/home/ubuntu/PycharmProjects/baselines/baselines/gail/checkpoint/UR5PathPlanTRPO5/UR5PathPlanTRPO5'
     if algo == 'trpo':
         #from baselines.gail import trpo_mpi4vrep
         from baselines.trpo_mpi import trpo_vrep
@@ -146,14 +147,14 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
         workerseed = seed + 10000 * MPI.COMM_WORLD.Get_rank()
         set_global_seeds(workerseed)
         env.seed(workerseed)
-        trpo_vrep.learn(env, policy_fn, rank,
+        trpo_vrep.learn(env, policy_fn, rank,  #reward_giver, dataset,
                         pretrained=pretrained, pretrained_weight=pretrained_weight,
                         g_step=1, d_step=d_step,
                         entcoeff=policy_entcoeff,
                         max_timesteps=num_timesteps,
                         ckpt_dir=checkpoint_dir, log_dir=log_dir,
                         save_per_iter=save_per_iter,
-                        timesteps_per_batch=512,
+                        timesteps_per_batch=1024,
                         max_kl=0.01, cg_iters=30, cg_damping=0.5,
                         gamma=0.995, lam=0.97,
                         vf_iters=5, vf_stepsize=1e-2,

@@ -69,7 +69,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
             ep_rets = []
             ep_true_rets = []
             ep_lens = []
-            print("success rate: {}/{}".format(suc, episode))
+            logger.info("success rate: {}/{}".format(suc, episode))
             episode = 0
             suc = 0
         i = t % horizon
@@ -134,7 +134,7 @@ def learn(env, policy_func, rank,
     # ----------------------------------------
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_func("pi", ob_space, ac_space, reuse=(pretrained_weight != None))  #
+    pi = policy_func("pi", ob_space, ac_space)  #, reuse=(pretrained_weight != None)
     oldpi = policy_func("oldpi", ob_space, ac_space)
     atarg = tf.placeholder(dtype=tf.float32, shape=[None])  # Target advantage function (if applicable)
     ret = tf.placeholder(dtype=tf.float32, shape=[None])  # Empirical return
@@ -236,7 +236,9 @@ def learn(env, policy_func, rank,
     ep_stats = stats(["True_rewards", "Rewards", "Episode_length"])
     # if provide pretrained weight
     if pretrained_weight is not None:
-        U.load_variables(pretrained_weight, variables=pi.get_variables())
+        #U.load_variables(pretrained_weight, variables=pi.get_variables())
+        saver = tf.train.Saver()
+        saver.restore(tf.get_default_session(), pretrained_weight)
 
     while True:
         if callback: callback(locals(), globals())

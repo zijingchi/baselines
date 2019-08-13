@@ -228,7 +228,7 @@ class MLPD(MlpPolicy):
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = dense(last_out, pdtype.param_shape()[0] // 2, "polfinal", U.normc_initializer(0.01))
             logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0] // 2],
-                                     initializer=tf.constant_initializer(-3))
+                                     initializer=tf.constant_initializer(-3.5))
             pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
         else:
             pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
@@ -247,3 +247,98 @@ class MLPD(MlpPolicy):
     def act(self, stochastic, ob):
         ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None], ob['obstacle_pos'][None])
         return ac1[0], vpred1[0]
+
+class MLPI(MlpPolicy):
+    def _init__(self, name, reuse=False, *args, **kwargs):
+        super(MLPI, self).__init__(name, reuse, *args, **kwargs)
+
+    def _init(self, ob_space, ac_space, hid_size, num_hid_layers, gaussian_fixed_var=True):
+        assert isinstance(ob_space, gym.spaces.Dict)
+
+        self.pdtype = pdtype = make_pdtype(ac_space)
+        sequence_length = None
+        from baselines.common.models import nature_cnn
+        ob_config = U.get_placeholder(name="ob", dtype=tf.float32,
+                                      shape=[sequence_length] + list(ob_space.spaces['joint'].shape))
+        ob_target = U.get_placeholder(name="goal", dtype=tf.float32,
+                                      shape=[sequence_length] + list(ob_space.spaces['target'].shape))
+        ob_img1 = U.get_placeholder(name='img1', dtype=tf.float32,
+                                    shape=[sequence_length] + list(ob_space.spaces['image1'].shape))
+        ob_img2 = U.get_placeholder(name='img2', dtype=tf.uint8,
+                                    shape=[sequence_length] + list(ob_space.spaces['image2'].shape))
+        img1_process = self.network_fn(ob_img1, [(64, 5, 2), (128, 5, 2), (128, 5, 2), (256, 3, 1)], "img1conv")
+        img2_process = self.network_fn(ob_img2, [(64, 5, 2), (128, 5, 2), (128, 5, 2), (256, 3, 1)], "img2conv")
+        img1_process = tf.layers.flatten(img1_process)
+        img2_process = tf.layers.flatten(img2_process)
+
+
+        last_out = ob_config
+        goal_last_out = ob_target
+        obs_last_out = tf.concat((img1_process, img2_process), axis=-1)
+        for i in range(num_hid_layers):
+            last_out = dense(last_out, hid_size, "vfcfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                             weight_loss_dict={})
+            last_out = tf.nn.tanh(last_out)
+            goal_last_out = dense(goal_last_out, hid_size, "vfgfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                  weight_loss_dict={})
+            goal_last_out = tf.nn.tanh(goal_last_out)
+            obs_last_out = dense(obs_last_out, hid_size, "vfobsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                 weight_loss_dict={})
+            obs_last_out = tf.nn.tanh(obs_last_out)
+        vpred = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        self.vpred = dense(vpred, 1, "vffinal", weight_init=U.normc_initializer(1.0))[:, 0]
+
+        # construct policy probability distribution model
+        last_out = ob_config
+        goal_last_out = ob_target
+        obs_last_out = tf.concat((img1_process, img2_process), axis=-1)
+
+        for i in range(num_hid_layers):
+            last_out = dense(last_out, hid_size, "pol_cfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                             weight_loss_dict={})
+            #last_out = tf.layers.batch_normalization(last_out, training=is_training, name="pol_cbn%i"%(i+1))
+            last_out = tf.nn.tanh(last_out)
+            goal_last_out = dense(goal_last_out, hid_size, "pol_gfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                  weight_loss_dict={})
+            #goal_last_out = tf.layers.batch_normalization(goal_last_out, training=is_training, name="pol_gbn%i" % (i + 1))
+            goal_last_out = tf.nn.tanh(goal_last_out)
+            obs_last_out = dense(obs_last_out, hid_size, "pol_obsfc%i" % (i + 1), weight_init=U.normc_initializer(1.0),
+                                 weight_loss_dict={})
+            #obs_last_out = tf.layers.batch_normalization(obs_last_out, training=is_training, name="pol_obn%i"%(i+1))
+            obs_last_out = tf.nn.tanh(obs_last_out)
+        last_out = tf.concat([last_out, goal_last_out, obs_last_out], -1)
+        if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
+            mean = dense(last_out, pdtype.param_shape()[0] // 2, "polfinal", U.normc_initializer(0.01))
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0] // 2],
+                                     initializer=tf.constant_initializer(-3))
+            pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
+        else:
+            pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
+
+        self.pd = pdtype.pdfromflat(pdparam)
+
+        self.state_in = []
+        self.state_out = []
+
+        # change for BC
+        stochastic = U.get_placeholder(name="stochastic", dtype=tf.bool, shape=())
+        ac = U.switch(stochastic, self.pd.sample(), self.pd.mode())
+        self.ac = ac
+        self._act = U.function([stochastic, ob_config, ob_target, ob_img1, ob_img2], [ac, self.vpred])
+
+    def act(self, stochastic, ob):
+        ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None], ob['image1'][None], ob['image1'][None])
+        return ac1[0], vpred1[0]
+
+    def network_fn(self, X, convs, scope):
+        out = tf.cast(X, tf.float32) / 255.
+        with tf.variable_scope(scope):
+            for num_outputs, kernel_size, stride in convs:
+                out = tf.contrib.layers.convolution2d(out,
+                                           num_outputs=num_outputs,
+                                           kernel_size=kernel_size,
+                                           stride=stride,
+                                           activation_fn=tf.nn.relu,
+                                           )
+
+        return out

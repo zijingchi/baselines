@@ -93,7 +93,7 @@ class TransitionClassifier4Dict(object):
         self.scope = scope
         self.observation_shape = env.observation_space.spaces['joint'].shape
         self.obstacle_pos_shape = env.observation_space.spaces['obstacle_pos'].shape
-        self.obstacle_ori_shape = env.observation_space.spaces['obstacle_ori'].shape
+        # self.obstacle_ori_shape = env.observation_space.spaces['obstacle_ori'].shape
         self.actions_shape = env.action_space.shape
         #self.input_shape = tuple([o+a for o, a in zip(ob_shape, self.actions_shape)])
         self.num_actions = env.action_space.shape[0]
@@ -103,9 +103,9 @@ class TransitionClassifier4Dict(object):
         self.build_ph()
         # Build grpah
         generator_logits = self.build_graph(self.generator_obser_config_ph, self.generator_goal_ph,
-                                            self.generator_obs_pos_ph, self.generator_obs_ori_ph, self.generator_acs_ph, reuse=False)
+                                            self.generator_obs_pos_ph, self.generator_acs_ph, reuse=False)
         expert_logits = self.build_graph(self.expert_obser_config_ph, self.expert_goal_ph, self.expert_obs_pos_ph,
-                                         self.expert_obs_ori_ph, self.expert_acs_ph, reuse=True)
+                                         self.expert_acs_ph, reuse=True)
         # Build accuracy
         generator_acc = tf.reduce_mean(tf.to_float(tf.nn.sigmoid(generator_logits) < 0.5))
         expert_acc = tf.reduce_mean(tf.to_float(tf.nn.sigmoid(expert_logits) > 0.5))
@@ -130,8 +130,8 @@ class TransitionClassifier4Dict(object):
         var_list = self.get_trainable_variables()
         self.lossandgrad = U.function(
             [self.generator_obser_config_ph, self.generator_goal_ph, self.generator_obs_pos_ph,
-             self.generator_obs_ori_ph, self.generator_acs_ph, self.expert_obser_config_ph, self.expert_goal_ph,
-             self.expert_obs_pos_ph, self.expert_obs_ori_ph, self.expert_acs_ph],
+             self.generator_acs_ph, self.expert_obser_config_ph, self.expert_goal_ph,
+             self.expert_obs_pos_ph, self.expert_acs_ph],
             self.losses + [U.flatgrad(self.total_loss, var_list)])
 
     def build_ph(self):
@@ -140,17 +140,17 @@ class TransitionClassifier4Dict(object):
         self.generator_goal_ph = tf.placeholder(tf.float32, (None,) + self.observation_shape,
                                                         name="generator_obser_config_ph")
         self.generator_obs_pos_ph = tf.placeholder(tf.float32, (None,) + (3,), name="generator_obs_pos_ph")
-        self.generator_obs_ori_ph = tf.placeholder(tf.float32, (None,) + (3,), name="generator_obs_ori_ph")
+        #self.generator_obs_ori_ph = tf.placeholder(tf.float32, (None,) + (3,), name="generator_obs_ori_ph")
         self.generator_acs_ph = tf.placeholder(tf.float32, (None, ) + self.actions_shape, name="actions_ph")
         self.expert_obser_config_ph = tf.placeholder(tf.float32, (None, ) + self.observation_shape,
                                                      name="expert_observations_config_ph")
         self.expert_goal_ph = tf.placeholder(tf.float32, (None,) + self.observation_shape,
                                                         name="expert_obser_config_ph")
         self.expert_obs_pos_ph = tf.placeholder(tf.float32, (None,) + (3,), name="expert_obs_pos_ph")
-        self.expert_obs_ori_ph = tf.placeholder(tf.float32, (None,) + (3,), name="expert_obs_ori_ph")
+        #self.expert_obs_ori_ph = tf.placeholder(tf.float32, (None,) + (3,), name="expert_obs_ori_ph")
         self.expert_acs_ph = tf.placeholder(tf.float32, (None, ) + self.actions_shape, name="expert_actions_ph")
 
-    def build_graph(self, obs_ph, goal_ph, obs_pos_ph, obs_ori_ph, acs_ph, reuse=False):
+    def build_graph(self, obs_ph, goal_ph, obs_pos_ph, acs_ph, reuse=False):
         with tf.variable_scope(self.scope):
             if reuse:
                 tf.get_variable_scope().reuse_variables()
@@ -160,13 +160,13 @@ class TransitionClassifier4Dict(object):
             obs = (obs_ph - self.obs_rms.mean) / self.obs_rms.std'''
             obs_config = obs_ph
             obs_goal = goal_ph
-            op_last_out = tf.contrib.layers.fully_connected(obs_pos_ph, self.hidden_size,)
-            oo_last_out = tf.contrib.layers.fully_connected(obs_ori_ph, self.hidden_size,)
-            op_last_out = tf.layers.batch_normalization(op_last_out, True, name="obs_pos_bn")
-            oo_last_out = tf.layers.batch_normalization(oo_last_out, True, name="obs_ori_bn")
-            op_last_out = tf.nn.tanh(op_last_out)
-            oo_last_out = tf.nn.tanh(oo_last_out)
-            obs_last_out = tf.concat([op_last_out, oo_last_out], axis=-1)
+            #op_last_out = tf.contrib.layers.fully_connected(obs_pos_ph, self.hidden_size,)
+            #oo_last_out = tf.contrib.layers.fully_connected(obs_ori_ph, self.hidden_size,)
+            #op_last_out = tf.layers.batch_normalization(op_last_out, True, name="obs_pos_bn")
+            #oo_last_out = tf.layers.batch_normalization(oo_last_out, True, name="obs_ori_bn")
+            #op_last_out = tf.nn.tanh(op_last_out)
+            #oo_last_out = tf.nn.tanh(oo_last_out)
+            obs_last_out = obs_pos_ph
             for i in range(self.hidden_layers):
                 obs_config = tf.contrib.layers.fully_connected(obs_config, self.hidden_size*2**(self.hidden_layers-1-i), activation_fn=tf.nn.tanh)
                 obs_goal = tf.contrib.layers.fully_connected(obs_goal, self.hidden_size*2**(self.hidden_layers-1-i), activation_fn=tf.nn.tanh)
@@ -182,7 +182,7 @@ class TransitionClassifier4Dict(object):
     def get_trainable_variables(self):
         return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, self.scope)
 
-    def get_reward(self, obs, goal, obs_pos, obs_ori, acs):
+    def get_reward(self, obs, goal, obs_pos, acs):
         sess = tf.get_default_session()
         if len(obs.shape) == 1:
             obs = np.expand_dims(obs, 0)
@@ -190,11 +190,11 @@ class TransitionClassifier4Dict(object):
             goal = np.expand_dims(goal, 0)
         if len(obs_pos.shape) == 1:
             obs_pos = np.expand_dims(obs_pos, 0)
-        if len(obs_ori.shape) == 1:
-            obs_ori = np.expand_dims(obs_ori, 0)
+       # if len(obs_ori.shape) == 1:
+       #     obs_ori = np.expand_dims(obs_ori, 0)
         if len(acs.shape) == 1:
             acs = np.expand_dims(acs, 0)
         feed_dict = {self.generator_obser_config_ph: obs, self.generator_goal_ph: goal,
-                     self.generator_obs_pos_ph: obs_pos, self.generator_obs_ori_ph: obs_ori, self.generator_acs_ph: acs}
+                     self.generator_obs_pos_ph: obs_pos, self.generator_acs_ph: acs}
         reward = sess.run(self.reward_op, feed_dict)
         return reward

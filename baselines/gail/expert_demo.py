@@ -8,7 +8,7 @@ pi = np.pi
 
 
 def main(args):
-    workpath = 'dataset/ur5expert1/'
+    workpath = 'dataset/ur5expert2/'
     if not os.path.exists(workpath):
         os.mkdir(workpath)
     dirlist = os.listdir(workpath)
@@ -18,7 +18,7 @@ def main(args):
     else:
         maxdir = max(numlist)
     os.chdir(workpath)
-    env = UR5VrepEnv(dof=3, enable_cameras=True)
+    env = UR5VrepEnv(dof=5, enable_cameras=True)
     i = maxdir + 1
     while i < maxdir + 1000:
         print('iter:', i)

@@ -75,7 +75,7 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         acs[i] = ac
         prevacs[i] = prevac
 
-        rew = reward_giver.get_reward(ob["joint"], ob["target"], ob["obstacle_pos"], ob["obstacle_ori"], ac)
+        rew = reward_giver.get_reward(ob["joint"], ob["target"], ob["obstacle_pos"], ac)
         try:
             ob, true_rew, new, _ = env.step(ac)
         except:
@@ -138,7 +138,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
     ob_config = U.get_placeholder_cached(name="ob")
     ob_target = U.get_placeholder_cached(name="goal")
     obs_pos = U.get_placeholder_cached(name="obs_pos")
-    obs_ori = U.get_placeholder_cached(name="obs_ori")
+    #obs_ori = U.get_placeholder_cached(name="obs_ori")
     ac = pi.pdtype.sample_placeholder([None])
 
     kloldnew = oldpi.pd.kl(pi.pd)
@@ -181,10 +181,10 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
 
     assign_old_eq_new = U.function([], [], updates=[tf.assign(oldv, newv)
                                                     for (oldv, newv) in zipsame(oldpi.get_variables(), pi.get_variables())])
-    compute_losses = U.function([ob_config, ob_target, obs_pos, obs_ori, ac, atarg], losses)
-    compute_lossandgrad = U.function([ob_config, ob_target, obs_pos, obs_ori, ac, atarg], losses + [U.flatgrad(optimgain, var_list)])
-    compute_fvp = U.function([flat_tangent, ob_config, ob_target, obs_pos, obs_ori, ac, atarg], fvp)
-    compute_vflossandgrad = U.function([ob_config, ob_target, obs_pos, obs_ori, ret], U.flatgrad(vferr, vf_var_list))
+    compute_losses = U.function([ob_config, ob_target, obs_pos, ac, atarg], losses)
+    compute_lossandgrad = U.function([ob_config, ob_target, obs_pos, ac, atarg], losses + [U.flatgrad(optimgain, var_list)])
+    compute_fvp = U.function([flat_tangent, ob_config, ob_target, obs_pos, ac, atarg], fvp)
+    compute_vflossandgrad = U.function([ob_config, ob_target, obs_pos, ret], U.flatgrad(vferr, vf_var_list))
 
     @contextmanager
     def timed(msg):
@@ -273,9 +273,9 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                 config.append(o["joint"])
                 goal.append(o["target"])
                 obstacle_pos.append(o["obstacle_pos"])
-                obstacle_ori.append(o["obstacle_ori"])
-            config, goal, obstacle_pos, obstacle_ori = map(np.array, [config, goal, obstacle_pos, obstacle_ori])
-            args = config, goal, obstacle_pos, obstacle_ori, seg["ac"], atarg
+                #obstacle_ori.append(o["obstacle_ori"])
+            config, goal, obstacle_pos = map(np.array, [config, goal, obstacle_pos])
+            args = config, goal, obstacle_pos, seg["ac"], atarg
             fvpargs = [arr[::5] for arr in args]
 
             assign_old_eq_new()  # set old parameter values to new parameter values
@@ -330,11 +330,11 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
                     assert all(np.allclose(ps, paramsums[0]) for ps in paramsums[1:])
             with timed("vf"):
                 for _ in range(vf_iters):
-                    for (mbob, mbg, mbop, mboo, mbret) in dataset.iterbatches((config, goal, obstacle_pos, obstacle_ori, seg["tdlamret"]),
+                    for (mbob, mbg, mbop, mbret) in dataset.iterbatches((config, goal, obstacle_pos, seg["tdlamret"]),
                                                              include_final_partial_batch=False, batch_size=128):
                         if hasattr(pi, "ob_rms"):
                             pi.ob_rms.update(mbob)  # update running mean/std for policy
-                        g = allmean(compute_vflossandgrad(mbob, mbg, mbop, mboo, mbret))
+                        g = allmean(compute_vflossandgrad(mbob, mbg, mbop, mbret))
                         vfadam.update(g, vf_stepsize)
 
         g_losses = meanlosses
@@ -350,14 +350,14 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         batch_size = len(ob) // d_step
         d_losses = []  # list of tuples, each of which gives the loss for a minibatch
         dof = env.env.env.dof
-        for ob_batch, goal_batch, obs_pos_batch, obs_ori_batch, ac_batch in dataset.iterbatches(
-                (config, goal, obstacle_pos, obstacle_ori, ac),
+        for ob_batch, goal_batch, obs_pos_batch, ac_batch in dataset.iterbatches(
+                (config, goal, obstacle_pos, ac),
                 include_final_partial_batch=False, batch_size=batch_size):
             ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob_batch))
             # update running mean/std for reward_giver
             if hasattr(reward_giver, "obs_rms"): reward_giver.obs_rms.update(np.concatenate((ob_batch, ob_expert), 0))
-            *newlosses, g = reward_giver.lossandgrad(ob_batch, goal_batch, obs_pos_batch, obs_ori_batch, ac_batch,
-                                                     ob_expert[:, :dof], ob_expert[:, dof:2*dof], ob_expert[:, -6:-3], ob_expert[:, -3:], ac_expert)
+            *newlosses, g = reward_giver.lossandgrad(ob_batch, goal_batch, obs_pos_batch, ac_batch,
+                                                     ob_expert[:, :dof], ob_expert[:, dof:2*dof], ob_expert[:, 2*dof:2*dof+3], ac_expert)
             d_adam.update(allmean(g), d_stepsize)
             d_losses.append(newlosses)
         logger.log(fmt_row(13, np.mean(d_losses, axis=0)))
