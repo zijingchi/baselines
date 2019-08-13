@@ -29,7 +29,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     rew = 0.0
     true_rew = 0.0
     ob = env.reset()
-
+    suc = 0
     cur_ep_ret = 0
     cur_ep_len = 0
     cur_ep_true_ret = 0
@@ -50,7 +50,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     news = np.zeros(horizon, 'int32')
     acs = np.array([ac for _ in range(horizon)])
     prevacs = acs.copy()
-
+    episode = 0
     while True:
         prevac = ac
         ac, vpred = pi.act(stochastic, ob)
@@ -66,6 +66,9 @@ def traj_segment_generator(pi, env, horizon, stochastic):
             # Be careful!!! if you change the downstream algorithm to aggregate
             # several of these batches, then be sure to do a deepcopy
             ep_rets = []
+            logger.log('success rate:{}/{}'.format(suc, episode))
+            episode = 0
+            suc = 0
             ep_true_rets = []
             ep_lens = []
         i = t % horizon
@@ -76,7 +79,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         prevacs[i] = prevac
 
         try:
-            ob, true_rew, new, _ = env.step(ac)
+            ob, true_rew, new, info = env.step(ac)
         except:
             print('error when step simulation... retrying...')
         rews[i] = true_rew
@@ -86,6 +89,9 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         cur_ep_true_ret += true_rew
         cur_ep_len += 1
         if new:
+            episode += 1
+            if true_rew > 0.5:
+                suc += 1
             ep_rets.append(cur_ep_ret)
             ep_true_rets.append(cur_ep_true_ret)
             ep_lens.append(cur_ep_len)
@@ -128,7 +134,7 @@ def learn(env, policy_func, rank,
     # ----------------------------------------
     ob_space = env.observation_space
     ac_space = env.action_space
-    pi = policy_func("pi", ob_space, ac_space, reuse=(pretrained_weight != None))  #
+    pi = policy_func("pi", ob_space, ac_space, )  # reuse=(pretrained_weight != None)
     oldpi = policy_func("oldpi", ob_space, ac_space)
     atarg = tf.placeholder(dtype=tf.float32, shape=[None])  # Target advantage function (if applicable)
     ret = tf.placeholder(dtype=tf.float32, shape=[None])  # Empirical return
@@ -228,7 +234,9 @@ def learn(env, policy_func, rank,
     ep_stats = stats(["True_rewards", "Rewards", "Episode_length"])
     # if provide pretrained weight
     if pretrained_weight is not None:
-        U.load_variables(pretrained_weight, variables=pi.get_variables())
+        #U.load_variables(pretrained_weight, variables=pi.get_variables())
+        saver = tf.train.Saver()
+        saver.restore(tf.get_default_session(), pretrained_weight)
 
     while True:
         if callback: callback(locals(), globals())

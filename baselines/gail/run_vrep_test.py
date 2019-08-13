@@ -70,7 +70,7 @@ def get_task_name(args):
 def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = UR5VrepEnvMultiObstacle(obs_space_type='dict', l2_thresh=0.06)
+    env = UR5VrepEnvMultiObstacle(l2_thresh=0.12)
     from baselines.common.wrappers import TimeLimit
     env = TimeLimit(env, max_episode_steps=100)
 
@@ -82,7 +82,7 @@ def main(args):
     env.seed(args.seed)
     gym.logger.setLevel(logging.WARN)
     #task_name = get_task_name(args)
-    task_name = "UR5PathPlanTRPO"
+    task_name = "UR5PathPlanTRPO3"
     args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
     args.log_dir = osp.join(args.log_dir, task_name)
 
@@ -133,8 +133,8 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
         from baselines.gail import behavior_clone_vrep
         pretrained_weight = behavior_clone_vrep.learn(env, policy_fn, dataset,
                                                       max_iters=BC_max_iter, ckpt_dir='checkpoint/BC', verbose=True)
-    #path = 'trpo_gail.with_pretrained.transition_limitation_-1.HalfCheetah.g_step_3.d_step_2.policy_entcoeff_0.001.adversary_entcoeff_0.001.seed_0'
-    #pretrained_weight = "checkpoint/" + path
+    path = 'UR5PathPlanTRPO2/UR5PathPlanTRPO2'
+    pretrained_weight = "checkpoint/" + path
     if algo == 'trpo':
         #from baselines.gail import trpo_mpi4vrep
         from baselines.trpo_mpi import trpo_vrep
@@ -172,19 +172,26 @@ def runner(env, policy_func, load_model_path, timesteps_per_batch, number_trajs,
     U.initialize()
     # Prepare for rollouts
     # ----------------------------------------
-    U.load_state(load_model_path)
-
+    #U.load_state(load_model_path)
+    import tensorflow as tf
+    saver = tf.train.Saver()
+    saver.restore(tf.get_default_session(), load_model_path)
     obs_list = []
     acs_list = []
     len_list = []
     ret_list = []
+    suc_count = 0
     for _ in tqdm(range(number_trajs)):
-        traj = traj_1_generator(pi, env, timesteps_per_batch, stochastic=stochastic_policy)
+        traj, suc = traj_1_generator(pi, env, timesteps_per_batch, stochastic=stochastic_policy)
+        if suc:
+            suc_count += 1
         obs, acs, ep_len, ep_ret = traj['ob'], traj['ac'], traj['ep_len'], traj['ep_ret']
         obs_list.append(obs)
         acs_list.append(acs)
         len_list.append(ep_len)
         ret_list.append(ep_ret)
+        env.env.env.draw_policy_path(np.array(obs))
+
     if stochastic_policy:
         print('stochastic policy:')
     else:
@@ -197,6 +204,7 @@ def runner(env, policy_func, load_model_path, timesteps_per_batch, number_trajs,
     avg_ret = sum(ret_list)/len(ret_list)
     print("Average length:", avg_len)
     print("Average return:", avg_ret)
+    print("Success rate: {}/{}".format(suc_count, number_trajs))
     return avg_len, avg_ret
 
 
@@ -219,11 +227,11 @@ def traj_1_generator(pi, env, horizon, stochastic):
 
     while True:
         ac, vpred = pi.act(stochastic, ob)
-        obs.append(ob)
+        obs.append(ob['joint'])
         news.append(new)
         acs.append(ac)
 
-        ob, rew, new, _ = env.step(ac)
+        ob, rew, new, info = env.step(ac)
         rews.append(rew)
 
         cur_ep_ret += rew
@@ -231,14 +239,18 @@ def traj_1_generator(pi, env, horizon, stochastic):
         if new or t >= horizon:
             break
         t += 1
-
+    if info['status']=='reach':
+        suc = True
+    else:
+        suc = False
+    obs.append(ob['joint'])
     obs = np.array(obs)
     rews = np.array(rews)
     news = np.array(news)
     acs = np.array(acs)
     traj = {"ob": obs, "rew": rews, "new": news, "ac": acs,
             "ep_ret": cur_ep_ret, "ep_len": cur_ep_len}
-    return traj
+    return traj, suc
 
 
 if __name__ == '__main__':

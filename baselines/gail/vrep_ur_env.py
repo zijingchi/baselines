@@ -3,6 +3,7 @@ import os
 import time
 import pickle
 import gym
+from baselines.gail.vrep_env_base import UR5VrepEnvBase
 from gym import spaces
 from gym.utils import seeding
 import numpy as np
@@ -10,7 +11,7 @@ import numpy as np
 pi = np.pi
 
 
-class UR5VrepEnv(vrep_env.VrepEnv):
+class UR5VrepEnv(UR5VrepEnvBase):
     metadata = {'render.modes': ['human', 'rgb_array'], }
 
     def __init__(
@@ -20,111 +21,31 @@ class UR5VrepEnv(vrep_env.VrepEnv):
             scene_path=None,
             l2_thresh=0.1,
             random_seed=0,
-            obs_space_type='dict',
             dof=5,
             enable_cameras=False,
     ):
 
-        vrep_env.VrepEnv.__init__(
+        UR5VrepEnvBase.__init__(
             self,
             server_addr,
             server_port,
             scene_path,
+            l2_thresh,
+            random_seed,
+            dof,
         )
-
-        # Settings
-
-        self.obstacle_pos = 5*np.ones(3)
-        self.obstacle_ori = np.zeros(3)
-        # All joints
-        ur5_joints = ['UR5_joint1', 'UR5_joint2', 'UR5_joint3', 'UR5_joint4', 'UR5_joint5'][:dof]
-
-        # Getting object handles
-        self.obstacle = self.get_object_handle('Obstacle')
-        # Meta
-        self.camera1 = self.get_object_handle('camera1')
-        self.camera2 = self.get_object_handle('camera2')
-        self.camera3 = self.get_object_handle('camera3')
-        self.zfar2 = self.get_obj_float_parameter(self.camera2,
-                                                  vrep.sim_visionfloatparam_far_clipping)
-        self.znear2 = self.get_obj_float_parameter(self.camera2,
-                                                   vrep.sim_visionfloatparam_near_clipping)
-        self.goal_viz = self.get_object_handle('Cuboid')
-        self.tip = self.get_object_handle('tip')
-        self.distance_handle = self.get_distance_handle('Distance')
-        self.distance = -1
-
         self.enable_cameras = enable_cameras
-        self.dof = dof
-        h = 256
-        w = 256
-        c = 3
-        self.img_size = [h, w, c]
-        # Actuators
-        self.oh_joint = list(map(self.get_object_handle, ur5_joints))
-        self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2])
-        self.target_joint_pos = np.array([0, - pi / 6, - pi / 3, 0, pi / 2])
-        self.l2_thresh = l2_thresh
-        self.collision_handle = self.get_collision_handle('Collision1')
-        #self.self_col_handle = self.get_collision_handle('SelfCollision')
-        joint_space = np.ones(self.dof)
-        self.action_space = spaces.Box(low=-0.12*joint_space, high=0.12*joint_space)
-        joint_bound = 2*pi*joint_space
-        obstacle_pos_lbound = np.array([-5, -5, 0])
-        obstalce_pos_hbound = np.array([5, 5, 2])
-        oob = 0.3
-        obstacle_ori_lbound = np.array([-oob, -oob, pi/2-oob])
-        obstacle_ori_hbound = np.array([oob, oob, pi/2+oob])
+        if enable_cameras:
+            self.camera1 = self.get_object_handle('camera1')
+            self.camera2 = self.get_object_handle('camera2')
+            self.camera3 = self.get_object_handle('camera3')
+            self.zfar2 = self.get_obj_float_parameter(self.camera2,
+                                                      vrep.sim_visionfloatparam_far_clipping)
+            self.znear2 = self.get_obj_float_parameter(self.camera2,
+                                                       vrep.sim_visionfloatparam_near_clipping)
 
-        if obs_space_type == 'concat':
-            concat_bound_l = np.concatenate((-joint_bound, -joint_bound, obstacle_pos_lbound, obstacle_ori_lbound), axis=-1)
-            concat_bound_h = np.concatenate((joint_bound, joint_bound, obstalce_pos_hbound, obstacle_ori_hbound), axis=-1)
-            self.observation_space = spaces.Box(low=-concat_bound_l, high=concat_bound_h)
-        elif obs_space_type == 'dict':
-            self.observation_space = spaces.Dict(dict(joint=spaces.Box(low=-joint_bound, high=joint_bound),
-                                                      target=spaces.Box(low=-joint_bound, high=joint_bound),
-                                                      obstacle_pos=spaces.Box(low=obstacle_pos_lbound,
-                                                                              high=obstalce_pos_hbound),
-                                                      obstacle_ori=spaces.Box(low=obstacle_ori_lbound,
-                                                                              high=obstacle_ori_hbound)))
-
-        self.seed(random_seed)
-
-    def _calPathThroughVrep(self, clientID, minConfigsForPathPlanningPath, inFloats, emptyBuff):
-        """send the signal to v-rep and retrieve the path tuple calculated by the v-rep script"""
-        dof = self.dof
-        maxTrialsForConfigSearch = 300  # a parameter needed for finding appropriate goal states
-        searchCount = 1  # how many times OMPL will run for a given task
-        # minConfigsForPathPlanningPath = 50  # interpolation states for the OMPL path
-        minConfigsForIkPath = 100  # interpolation states for the linear approach path
-        collisionChecking = 1  # whether collision checking is on or off
-        inInts = [collisionChecking, minConfigsForIkPath, minConfigsForPathPlanningPath,
-                  dof, maxTrialsForConfigSearch, searchCount]
-        res, retInts, path, retStrings, retBuffer = vrep.simxCallScriptFunction(clientID,
-                            'Dummy', vrep.sim_scripttype_childscript, 'findPath_goalIsState',
-                            inInts, inFloats, [], emptyBuff, vrep.simx_opmode_oneshot_wait)
-        """retInts, path, retStrings, retBuffer = self.call_childscript_function('Dummy', 'findPath_goalIsState', 
-                                                                              [inInts, inFloats, [], emptyBuff])"""
-        if (res == 0) and len(path) > 0:
-            n_path = retInts[0]
-            final = np.array(path[-self.dof:])
-            tar = np.array(inFloats[-self.dof:])
-            if np.linalg.norm(final - tar) > 0.01:
-                n_path = 0
-                path = []
-        else:
-            n_path = 0
-        return n_path, path, res
-
-    def _checkInitCollision(self, clientID, emptyBuff):
-        """returns 1 if collision occurred, 0 otherwise"""
-        res, retInts, path, retStrings, retBuffer = vrep.simxCallScriptFunction(clientID,
-                            'Dummy', vrep.sim_scripttype_childscript, 'checkCollision',
-                            [], [], [], emptyBuff, vrep.simx_opmode_oneshot_wait)
-        if res == 0:
-            return retInts[0]
-        else:
-            return -1
+    def _config(self):
+        return self.observation['joint']
 
     def _make_action(self, a):
         """Send action to v-rep
@@ -132,55 +53,48 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         cfg = self.observation['joint']
         newa = a + cfg
         self.set_joints(newa)
+        if (self.observation_space.spaces['joint'].low<newa).all() and (self.observation_space.spaces['joint'].high>newa).all():
+            return True
+        else:
+            return False
+
+    def _make_obs_space(self):
+        joint_lbound = np.array([-2*pi/3, -pi/2, -pi, -pi/2, 0])
+        joint_hbound = np.array([2 * pi / 3, pi / 6, 0, pi / 2, pi])
+        obstacle_pos_lbound = np.array([-5, -5, 0])
+        obstalce_pos_hbound = np.array([5, 5, 2])
+        oob = 0.3
+        obstacle_ori_lbound = np.array([-oob, -oob, pi / 2 - oob])
+        obstacle_ori_hbound = np.array([oob, oob, pi / 2 + oob])
+        self.observation_space = spaces.Dict(dict(joint=spaces.Box(low=joint_lbound, high=joint_hbound),
+                                                  target=spaces.Box(low=joint_lbound, high=joint_hbound),
+                                                  obstacle_pos=spaces.Box(low=obstacle_pos_lbound,
+                                                                          high=obstalce_pos_hbound),
+                                                  obstacle_ori=spaces.Box(low=obstacle_ori_lbound,
+                                                                          high=obstacle_ori_hbound)))
 
     def _make_observation(self):
         """Get observation from v-rep and stores in self.observation
         """
         joint_angles = [self.obj_get_joint_angle(joint) for joint in self.oh_joint]
-        #self.distance = self.read_distance(self.distance_handle)
-        if self.enable_cameras:
-            img1 = self.obj_get_vision_image(self.camera1)
-            img2 = self.obj_get_vision_image(self.camera2)
-            img3 = self.obj_get_vision_image(self.camera3)
-            img1 = np.flip(img1, 2)
-            img2 = np.flip(img2, 2)
-            img3 = np.flip(img3, 2)
-            self.observation = {'joint': np.array(joint_angles).astype('float32'),
-                                'target': self.target_joint_pos,
-                                'obstacle_pos': self.obstacle_pos,
-                                'obstacle_ori': self.obstacle_ori,
-                                'image1': img1, 'image2': img2, 'image3': img3}
-        else:
-            self.observation = {'joint': np.array(joint_angles).astype('float32'),
-                                'target': self.target_joint_pos,
-                                'obstacle_ori': self.obstacle_ori,
-                                'obstacle_pos': self.obstacle_pos}
+
+        self.observation = {'joint': np.array(joint_angles).astype('float32'),
+                            'target': self.target_joint_pos,
+                            'obstacle_ori': self.obstacle_ori,
+                            'obstacle_pos': self.obstacle_pos}
         if isinstance(self.observation_space, spaces.Box):
             self.observation = np.concatenate((np.array(joint_angles), self.target_joint_pos, self.observation_space), axis=-1)
         return self.observation
-
-    def set_joints(self, angles):
-        for j, a in zip(self.oh_joint, angles):
-            self.obj_set_joint_position(j, a)
 
     def compute_reward(self, state, action):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
         #pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
         approach = 2 if config_dis < self.l2_thresh else 0
-        '''level = 0
-        if config_dis < 0.5*self.init_goal_dis < pre_config_dis:
-            level = 0.2
-        elif config_dis < 0.2*self.init_goal_dis < pre_config_dis:
-            level = 0.5
-        elif pre_config_dis < 0.5 * self.init_goal_dis < config_dis:
-            level = -0.2
-        elif pre_config_dis < 0.2 * self.init_goal_dis < config_dis:
-            level = -0.5'''
-        # elif pre_config_dis < self.init_goal_dis < config_dis:
-        #     level = -0.8
         collision = -1 if self.collision_check else 0
         danger = -0.2 if self.distance < 2e-2 else 0
-        return approach + collision
+        valid = (self.observation_space.spaces['joint'].low<state).all() and (self.observation_space.spaces['joint'].high>state).all()
+        invalid = -1 if not valid else 0
+        return approach + collision + invalid
 
     def _action_process(self, ac):
         if isinstance(self.observation_space, spaces.Box):
@@ -193,7 +107,7 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         # self._make_observation()
         ac = self._action_process(ac)
         ac = np.clip(ac, self.action_space.low, self.action_space.high)
-        self._make_action(ac)
+        invalid = not self._make_action(ac)
         self.step_simulation()
         self._make_observation()
         self.collision_check = self.read_collision(self.collision_handle) or abs(self.observation['joint'][2])>5*pi/6
@@ -202,9 +116,15 @@ class UR5VrepEnv(vrep_env.VrepEnv):
             cfg = self.observation[:self.dof]
         else:
             cfg = self.observation['joint']
-        done = self._angle_dis(cfg, self.target_joint_pos, self.dof) < self.l2_thresh or self.collision_check
+
+        done = self._angle_dis(cfg, self.target_joint_pos, self.dof) < self.l2_thresh or self.collision_check or invalid
         reward = self.compute_reward(cfg, ac)
-        return self.observation, reward, done, {}
+        info = {}
+        if reward > 0.5 and done:
+            info["status"] = 'reach'
+        else:
+            info["status"] = 'collide'
+        return self.observation, reward, done, info
 
     def reset(self):
         if self.sim_running:
@@ -240,82 +160,19 @@ class UR5VrepEnv(vrep_env.VrepEnv):
 
         return ob
 
-    def reset_expert(self):
-        emptybuff = bytearray()
-        thresh = 0.1
-        while True:
-            ob = self.reset()
-            final_path = None
-            n_mid = int(self._angle_dis(self.target_joint_pos, self.init_joint_pos, self.dof) / thresh)
-            linear_res = self.directly_towards(n_mid)
-            self.set_joints(self.init_joint_pos)
-            self.step_simulation()
-            if linear_res == 0:
-                final_path = self.linear_sub
-                n_path = n_mid
-            else:
-                inFloats = self.init_joint_pos.tolist() + self.target_joint_pos.tolist()
-                n_path, path, res = self._calPathThroughVrep(self.cID, 100, inFloats, emptybuff)
-                if res==3:
-                    time.sleep(3)
-                    break
-                np_path = np.array(path)
-                re_path = np_path.reshape((n_path, self.dof))
-                c0 = self.init_joint_pos
-                final_path = [c0]
-                for c in re_path:
-                    if self._angle_dis(c, c0, self.dof) > thresh:
-                        final_path.append(c)
-                        c0 = c
-                # if c0.any() != np.array(self.target_joint_pos).any():
-                #    final_path.append(np.array(self.target_joint_pos))
-                n_path = len(final_path)
-            if n_path:
-                break
-        return n_path, final_path
-
-    def directly_towards(self, n):
-        init_jp = self.init_joint_pos
-        sub = (self.target_joint_pos - init_jp) / n
-        self.linear_sub = []
-        for i in range(n):
-            next_state = init_jp + sub * (i + 1)
-            self.linear_sub.append(next_state)
-            self.set_joints(next_state)
-            self.step_simulation()
-            colcheck = self.read_collision(self.collision_handle)
-            if colcheck == 1:
-                print('colliding during direct path')
-                return 1
-        print('reaching by direct path')
-        return 0
-
-    def _angle_dis(self, a1, a2, dof):
-        return np.linalg.norm(a1[:dof]-a2[:dof])
-
     def reset_obstacle(self):
         init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6-self.dof))))
         goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6-self.dof))))
         alpha = 0.5
         obs_pos = alpha*init_tip + (1-alpha)*goal_tip
-        obs_pos += np.concatenate((0.15*np.random.randn(2), np.array([0.15*np.random.rand()+0.23])))
+        obs_pos += np.concatenate((0.15*np.random.randn(2), np.array([0.25*np.random.rand()+0.28])))
         obs_ori = 0.2*np.random.randn(3)
         obs_ori[2] += pi/2
-        if isinstance(self.observation_space, spaces.Dict):
-            self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos'].low,
-                                        self.observation_space.spaces['obstacle_pos'].high)
-            self.obstacle_ori = np.clip(obs_ori, self.observation_space.spaces['obstacle_ori'].low,
-                                        self.observation_space.spaces['obstacle_ori'].high)
-        else:
-            self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[2*self.dof:-3],
-                                        self.observation_space.high[2*self.dof:-3])
-            self.obstacle_ori = np.clip(obs_ori, self.observation_space.low[-3:],
-                                        self.observation_space.high[-3:])
 
-    def _check_collision(self, pos, handle):
-        self.set_joints(pos)
-        self.step_simulation()
-        return self.read_collision(handle)
+        self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos'].low,
+                                    self.observation_space.spaces['obstacle_pos'].high)
+        self.obstacle_ori = np.clip(obs_ori, self.observation_space.spaces['obstacle_ori'].low,
+                                    self.observation_space.spaces['obstacle_ori'].high)
 
     def _clear_obs_col(self):
         self.step_simulation()
@@ -324,6 +181,26 @@ class UR5VrepEnv(vrep_env.VrepEnv):
         col1 = self._check_collision(self.target_joint_pos, self.collision_handle)
         col2 = self._check_collision(self.init_joint_pos, self.collision_handle)
         return col1 or col2
+
+    def _set_path_draw(self, path, obj, icolor=3):
+        l = len(path)
+        inFloats = path.flatten()
+        inInts = [self.dof, l, icolor]
+        emptyBuff = bytearray()
+        retInts, retFloats, retStrings, retBuffer = self.call_childscript_function(obj, 'drawPath_remote', [inInts, inFloats, [], emptyBuff])
+        draw_handle = retInts[0]
+        return draw_handle
+
+    def draw_policy_path(self, path):
+        policy_handle = self._set_path_draw(path, 'Dummy', 1)
+        self.directly_towards(40)
+        linear_path = np.array(self.linear_sub)
+        linear_handle = self._set_path_draw(linear_path, 'UR5', 3)
+        n_path, expert_path, _ = self._calPathThroughVrep(self.cID, 50, self.init_joint_pos.tolist() + self.target_joint_pos.tolist(), bytearray())
+        if n_path>0:
+            self._set_path_draw(np.array(expert_path), 'wall4', 2)
+        time.sleep(1)
+        #self.call_childscript_function('Dummy', 'rmvDraw_remote', [[linear_handle, policy_handle], [], [], bytearray()])
 
     def render(self, mode='human', close=False):
         pass
@@ -480,33 +357,26 @@ class UR5VrepEnvMultiObstacle(UR5VrepEnv):
             server_port=19997,
             scene_path=None,
             l2_thresh=0.1,
-            random_initial=True,
-            obs_space_type='dict',
+            random_seed=0,
             dof=5,
             enable_cameras=False,):
-        super(UR5VrepEnvMultiObstacle, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_initial,
-                                                      obs_space_type, dof, enable_cameras)
+        super(UR5VrepEnvMultiObstacle, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_seed,
+                                                      dof, enable_cameras)
         self.obstacle2 = self.get_object_handle('Obstacle2')
         self.obstacle_pos2 = np.ones(3)
         self.collision_handle = self.get_collision_handle('Collision')
-        joint_bound = 2 * pi * np.ones(self.dof)
+
+    def _make_obs_space(self):
+        joint_lbound = np.array([-2 * pi / 3, -pi / 2, -pi, -pi / 2, 0])
+        joint_hbound = np.array([2 * pi / 3, pi / 6, 0, pi / 2, pi])
         obstacle_pos_lbound = np.array([-5, -5, 0])
         obstalce_pos_hbound = np.array([5, 5, 2])
-
-        if obs_space_type == 'concat':
-            concat_bound_l = np.concatenate((-joint_bound, -joint_bound, obstacle_pos_lbound, obstacle_pos_lbound),
-                                            axis=-1)
-            concat_bound_h = np.concatenate((joint_bound, joint_bound, obstalce_pos_hbound, obstacle_pos_lbound),
-                                            axis=-1)
-            self.observation_space = spaces.Box(low=-concat_bound_l, high=concat_bound_h)
-        elif obs_space_type == 'dict':
-            self.observation_space = spaces.Dict(dict(joint=spaces.Box(low=-joint_bound, high=joint_bound),
-                                                      target=spaces.Box(low=-joint_bound, high=joint_bound),
-                                                      obstacle_pos1=spaces.Box(low=obstacle_pos_lbound,
-                                                                              high=obstalce_pos_hbound),
-                                                      obstacle_pos2=spaces.Box(low=obstacle_pos_lbound,
-                                                                              high=obstalce_pos_hbound)))
-
+        self.observation_space = spaces.Dict(dict(joint=spaces.Box(low=joint_lbound, high=joint_hbound),
+                                                  target=spaces.Box(low=joint_lbound, high=joint_hbound),
+                                                  obstacle_pos1=spaces.Box(low=obstacle_pos_lbound,
+                                                                           high=obstalce_pos_hbound),
+                                                  obstacle_pos2=spaces.Box(low=obstacle_pos_lbound,
+                                                                           high=obstalce_pos_hbound)))
     def _make_observation(self):
         """Get observation from v-rep and stores in self.observation
         """
@@ -529,8 +399,7 @@ class UR5VrepEnvMultiObstacle(UR5VrepEnv):
                                 'target': self.target_joint_pos,
                                 'obstacle_pos1': self.obstacle_pos,
                                 'obstacle_pos2': self.obstacle_pos2}
-        if isinstance(self.observation_space, spaces.Box):
-            self.observation = np.concatenate((np.array(joint_angles), self.target_joint_pos, self.obstacle_pos, self.obstacle_pos2), axis=-1)
+
         return self.observation
 
     def reset_obstacle(self):
@@ -539,12 +408,10 @@ class UR5VrepEnvMultiObstacle(UR5VrepEnv):
         alpha = 0.5
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
         obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
-        if isinstance(self.observation_space, spaces.Dict):
-            self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos1'].low,
-                                        self.observation_space.spaces['obstacle_pos1'].high)
-        else:
-            self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[2 * self.dof:-3],
-                                        self.observation_space.high[2 * self.dof:-3])
+
+        self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos1'].low,
+                                    self.observation_space.spaces['obstacle_pos1'].high)
+
         offset = np.concatenate((np.random.randn(2), np.random.rand(1)))
         self.obstacle_pos2 = self.obstacle_pos + 0.2*offset/np.linalg.norm(offset)
 
@@ -555,3 +422,14 @@ class UR5VrepEnvMultiObstacle(UR5VrepEnv):
         col1 = self._check_collision(self.target_joint_pos, self.collision_handle)
         col2 = self._check_collision(self.init_joint_pos, self.collision_handle)
         return col1 or col2
+
+
+def main():
+    env = UR5VrepEnv()
+    for _ in range(2):
+        env.reset()
+        env.draw_direct_path()
+        #time.sleep(1)
+    env.close()
+
+#main()
