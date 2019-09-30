@@ -46,7 +46,7 @@ class MlpPolicy(object):
 
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = dense(last_out, pdtype.param_shape()[0]//2, "polfinal", U.normc_initializer(0.01))
-            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.zeros_initializer())
+            logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0]//2], initializer=tf.constant_initializer(-2))
             pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
         else:
             pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
@@ -188,7 +188,7 @@ class MLPD(MlpPolicy):
         ob_target = U.get_placeholder(name="goal", dtype=tf.float32,
                                       shape=[sequence_length] + list(ob_space.spaces['target'].shape))
         obs_pos = U.get_placeholder(name="obs_pos", dtype=tf.float32,
-                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos'].shape))
+                                    shape=[sequence_length] + list(ob_space.spaces['obstacle_pos1'].shape))
         #is_training = U.get_placeholder(name="bn_training", dtype=tf.bool, shape=())
         # construct v function model
         '''with tf.variable_scope("obfilter"):
@@ -238,7 +238,7 @@ class MLPD(MlpPolicy):
         if gaussian_fixed_var and isinstance(ac_space, gym.spaces.Box):
             mean = dense(last_out, pdtype.param_shape()[0] // 2, "polfinal", U.normc_initializer(0.01))
             logstd = tf.get_variable(name="logstd", shape=[1, pdtype.param_shape()[0] // 2],
-                                     initializer=tf.constant_initializer(-3))
+                                     initializer=tf.constant_initializer(-3.6))
             pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
         else:
             pdparam = dense(last_out, pdtype.param_shape()[0], "polfinal", U.normc_initializer(0.01))
@@ -255,5 +255,5 @@ class MLPD(MlpPolicy):
         self._act = U.function([stochastic, ob_config, ob_target, obs_pos], [ac, self.vpred])
 
     def act(self, stochastic, ob):
-        ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None], ob['obstacle_pos'][None])
+        ac1, vpred1 = self._act(stochastic, ob['joint'][None], ob['target'][None], ob['obstacle_pos1'][None])
         return ac1[0], vpred1[0]

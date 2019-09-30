@@ -184,6 +184,72 @@ def traj_1_generator(pi, env, horizon, stochastic):
     return traj
 
 
+def bc_train(expert_path, scope_name, pol, lr, cpt_path, batch_size,  max_iter, dof, thresh, val_per_iter):
+    all_var = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope_name)
+    all_var = [v for v in all_var if v.name.find('/vf')==-1]
+    acs = pol.pdtype.sample_placeholder([None])
+    obs = pol.X
+    #loss = pol.pd.neglogp(acs)
+    metrics = tf.constant([1.5, 1.5, 1.5, 0.5, 0.5])[:dof]
+    loss2 = tf.reduce_mean(tf.square(tf.multiply(metrics, acs-pol.action)))
+    AdamOp = tf.train.AdamOptimizer(learning_rate=lr, epsilon=1e-9).minimize(loss2, var_list=all_var)
+    grad = tf.gradients(loss2, all_var)
+    savedir_fname = osp.join(cpt_path, 'bcmodel')
+    savevar = [v for v in all_var if "Adam" not in v.name]
+    U.initialize()
+    if osp.exists(savedir_fname):
+        U.load_variables(savedir_fname, variables=savevar)
+    dataset = PathPlanDset(expert_path=expert_path, traj_limitation=-1)
+    # dof += 1
+    for iter_so_far in tqdm(range(int(max_iter))):
+        ob_expert, ac_expert = dataset.get_next_batch(batch_size, 'train')
+        tar = ob_expert[:, dof:2 * dof]
+        cur = ob_expert[:, :dof]
+        avo = np.zeros_like(cur)
+        for i in range(len(avo)):
+            avo[i] = ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
+        g = U.get_session().run([grad, AdamOp], feed_dict={obs: ob_expert, acs: avo})
+
+        if iter_so_far % val_per_iter == 0:
+            ob_expert, ac_expert = dataset.get_next_batch(batch_size, 'val')
+            tar = ob_expert[:, dof:2 * dof]
+            cur = ob_expert[:, :dof]
+            avo = np.zeros_like(cur)
+            for i in range(len(avo)):
+                avo[i] = ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
+            val_loss = U.get_session().run(loss2, feed_dict={obs: ob_expert, acs: avo})
+            val_loss = np.mean(val_loss)
+
+            logger.log("Validation loss: {}".format(np.rad2deg(np.sqrt(val_loss))))
+
+    U.save_variables(savedir_fname, variables=savevar)
+
+def bc_val(env, pol, max_iter):
+    count = 0
+    ob = env.reset()
+    for i in range(max_iter):
+
+        print(i)
+        done = False
+        state = None
+        for j in range(120):
+            action, value, state, neglogpac = pol.step(ob[0], S=state, M=done)
+            ob, r, done, infos = env.step(action[0])
+            if done:
+                if infos[0]['status'] == 'reach':
+                    count += 1
+                break
+    print('success rate: ', count/max_iter)
+
+def vec2dir(v):
+    v = v / np.linalg.norm(v)  # 指向目标的单位角向量
+    a1 = np.arccos(v[0])
+    a2 = np.arcsin(v[1] / np.sin(a1))
+    a3 = np.arcsin(v[2] / (np.sin(a1) * np.cos(a2)))
+    b = np.sin(a1) * np.cos(a2) * np.cos(a3)
+    a4 = np.arctan2(v[3] / b, v[4] / b)  # [a1, a2, a3, a4]是tg的方向向量
+    return np.array([a1, a2, a3, a4])
+
 def get_task_name(args):
     task_name = 'BC'
     task_name += '.{}'.format(args.env_id.split("-")[0])

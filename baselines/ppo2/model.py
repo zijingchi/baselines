@@ -3,7 +3,7 @@ import functools
 
 from baselines.common.tf_util import get_session, save_variables, load_variables
 from baselines.common.tf_util import initialize
-
+from baselines.gail.bc_vrep import bc_train, bc_val
 try:
     from baselines.common.mpi_adam_optimizer import MpiAdamOptimizer
     from mpi4py import MPI
@@ -25,7 +25,7 @@ class Model(object):
     - Save load the model
     """
     def __init__(self, *, policy, nbatch_act, nbatch_train,
-                nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None):
+                nsteps, ent_coef, vf_coef, max_grad_norm, mpi_rank_weight=1, comm=None, microbatch_size=None, env=None):
         self.sess = sess = get_session()
 
         if MPI is not None and comm is None:
@@ -41,6 +41,9 @@ class Model(object):
                 train_model = policy(nbatch_train, nsteps, sess)
             else:
                 train_model = policy(microbatch_size, nsteps, sess)
+            bc_train('../gail/dataset/ur5expert3', 'ppo2_model', train_model, 1e-3, './ckpt/concat128', nbatch_train, 1000, 5, 0.08, 50)
+            if env:
+                bc_val(env, act_model, 100)
 
         # CREATE THE PLACEHOLDERS
         self.A = A = train_model.pdtype.sample_placeholder([None])

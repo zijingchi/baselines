@@ -40,7 +40,7 @@ def argsparser():
 
 
 def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
-          adam_epsilon=1e-5, optim_stepsize=3e-4,
+          adam_epsilon=1e-6, optim_stepsize=2e-4,
           ckpt_dir=None, log_dir=None, task_name=None,
           verbose=False):
 
@@ -61,6 +61,15 @@ def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
     lossandgrad = U.function([ob, ac, stochastic], [loss]+[U.flatgrad(loss, var_list)])
 
     U.initialize()
+    if ckpt_dir is None:
+        savedir_fname = tempfile.TemporaryDirectory().name
+    else:
+        savedir_fname = osp.join(ckpt_dir, 'model')
+    if osp.exists(savedir_fname):
+        try:
+            U.load_variables(savedir_fname, pi.get_variables())
+        except:
+            print("size of the pretrained model does not match the current model")
     adam.sync()
     logger.log("Pretraining with Behavior Cloning...")
     for iter_so_far in tqdm(range(int(max_iters))):
@@ -72,10 +81,10 @@ def learn(env, policy_func, dataset, optim_batch_size=128, max_iters=1e4,
             val_loss, _ = lossandgrad(ob_expert, ac_expert, True)
             logger.log("Training loss: {}, Validation loss: {}".format(train_loss, val_loss))
 
-    if ckpt_dir is None:
+    '''if ckpt_dir is None:
         savedir_fname = tempfile.TemporaryDirectory().name
     else:
-        savedir_fname = osp.join(ckpt_dir, task_name)
+        savedir_fname = osp.join(ckpt_dir, task_name)'''
     U.save_variables(savedir_fname, variables=var_list)
     return savedir_fname
 

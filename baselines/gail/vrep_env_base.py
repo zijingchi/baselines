@@ -32,7 +32,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
         self.obstacle_pos = 5*np.ones(3)
         self.obstacle_ori = np.zeros(3)
         # All joints
-        ur5_joints = ['UR5_joint1', 'UR5_joint2', 'UR5_joint3', 'UR5_joint4', 'UR5_joint5', 'UR5_joint6'][:dof]
+        ur5_joints = ['UR5_joint1', 'UR5_joint2', 'UR5_joint3', 'UR5_joint4', 'UR5_joint5', 'UR5_joint6'][:5]
 
         # Getting object handles
         self.obstacle = self.get_object_handle('Obstacle')
@@ -43,10 +43,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
         self.distance = -1
 
         self.dof = dof
-        h = 256
-        w = 256
-        c = 3
-        self.img_size = [h, w, c]
+
         # Actuators
         self.oh_joint = list(map(self.get_object_handle, ur5_joints))
         self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2, 0])
@@ -55,8 +52,8 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
         self.collision_handle = self.get_collision_handle('Collision1')
         #self.self_col_handle = self.get_collision_handle('SelfCollision')
         joint_space = np.ones(self.dof)
-        self.action_space = spaces.Box(low=-0.12*joint_space, high=0.12*joint_space)
-        self._make_obs_space()
+        self.action_space = spaces.Box(low=-0.24*joint_space, high=0.24*joint_space)
+        #self._make_obs_space()
 
         self.seed(random_seed)
 
@@ -131,7 +128,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
         self._make_action(ac)
         self.step_simulation()
         self._make_observation()
-        self.collision_check = self.read_collision(self.collision_handle) or abs(self.observation['joint'][2])>5*pi/6
+        self.collision_check = self.read_collision(self.collision_handle) or abs(self._config()[2])>5*pi/6
         self.distance = self.read_distance(self.distance_handle)
         cfg = self._config()
         done = self._angle_dis(cfg, self.target_joint_pos, self.dof) < self.l2_thresh or self.collision_check

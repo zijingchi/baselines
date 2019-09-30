@@ -46,6 +46,8 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
     acs = np.array([ac for _ in range(horizon)])
     prevacs = acs.copy()
     viz_count = 0
+    suc = 0
+    episode = 0
     while True:
         prevac = ac
         ac, vpred = pi.act(stochastic, ob)
@@ -61,6 +63,9 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
             # Be careful!!! if you change the downstream algorithm to aggregate
             # several of these batches, then be sure to do a deepcopy
             ep_rets = []
+            logger.log('success rate:{}/{}'.format(suc, episode))
+            suc = 0
+            episode = 0
             ep_true_rets = []
             ep_lens = []
         i = t % horizon
@@ -73,7 +78,7 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         rew = reward_giver.get_reward(ob, ac)
         #if viz_count%10==0:
         #    env.render()
-        ob, true_rew, new, _ = env.step(ac)
+        ob, true_rew, new, info = env.step(ac)
         rews[i] = rew
         true_rews[i] = true_rew
 
@@ -81,6 +86,8 @@ def traj_segment_generator(pi, env, reward_giver, horizon, stochastic):
         cur_ep_true_ret += true_rew
         cur_ep_len += 1
         if new:
+            episode += 1
+            if info['status'] == 'reach': suc += 1
             ep_rets.append(cur_ep_ret)
             ep_true_rets.append(cur_ep_true_ret)
             ep_lens.append(cur_ep_len)
@@ -326,6 +333,7 @@ def learn(env, policy_func, reward_giver, expert_dataset, rank,
         ob_expert, ac_expert = expert_dataset.get_next_batch(len(ob))
         batch_size = len(ob) // d_step
         d_losses = []  # list of tuples, each of which gives the loss for a minibatch
+        #for _ in range(d_step):
         for ob_batch, ac_batch in dataset.iterbatches((ob, ac),
                                                       include_final_partial_batch=False,
                                                       batch_size=batch_size):

@@ -106,7 +106,7 @@ def learn(*, network, env, total_timesteps, eval_env=None, seed=None, nsteps=204
 
     model = model_fn(policy=policy, nbatch_act=nenvs, nbatch_train=nbatch_train,
                     nsteps=nsteps, ent_coef=ent_coef, vf_coef=vf_coef,
-                    max_grad_norm=max_grad_norm, comm=comm, mpi_rank_weight=mpi_rank_weight)
+                    max_grad_norm=max_grad_norm, comm=comm, mpi_rank_weight=mpi_rank_weight, env=None)
 
     if load_path is not None:
         model.load(load_path)
@@ -137,9 +137,11 @@ def learn(*, network, env, total_timesteps, eval_env=None, seed=None, nsteps=204
         cliprangenow = cliprange(frac)
 
         if update % log_interval == 0 and is_mpi_root: logger.info('Stepping environment...')
-
+        logger.log('iter:', update)
         # Get minibatch
-        obs, returns, masks, actions, values, neglogpacs, states, epinfos = runner.run() #pylint: disable=E0632
+        obs, returns, masks, actions, values, neglogpacs, states, epinfos, sucinfos = runner.run() #pylint: disable=E0632
+        #suc_rate = sum(sucinfos)/len(sucinfos)
+        logger.log('success rate:{:d}/{:d}'.format(sum(sucinfos), len(sucinfos)))
         if eval_env is not None:
             eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run() #pylint: disable=E0632
 

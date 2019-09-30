@@ -8,7 +8,7 @@ pi = np.pi
 
 
 def main(args):
-    workpath = 'dataset/ur5expert1/'
+    workpath = 'dataset/ur5expert3/'
     if not os.path.exists(workpath):
         os.mkdir(workpath)
     dirlist = os.listdir(workpath)
@@ -18,13 +18,14 @@ def main(args):
     else:
         maxdir = max(numlist)
     os.chdir(workpath)
-    env = UR5VrepEnv(dof=3, enable_cameras=True)
+    env = UR5VrepEnv(dof=5, enable_cameras=True, l2_thresh=0.08, random_seed=3)
     i = maxdir + 1
     while i < maxdir + 1000:
         print('iter:', i)
         n_path, path = env.reset_expert()
+        if n_path==0: continue
         init = {'init_joint_pos': env.init_joint_pos, 'target_joint_pos': env.target_joint_pos,
-                'obstable_pos': env.obstacle_pos}
+                'obstacle_pos': env.obstacle_pos}
         os.mkdir(str(i))
         os.mkdir(str(i) + "/img1")
         os.mkdir(str(i) + "/img2")
@@ -35,6 +36,8 @@ def main(args):
             action = path[t+1] - path[t]
             observation, _, done, _ = env.step(action)
             obs.append(observation['joint'])
+            #ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
+            #action = np.clip(action, env.action_space.low, env.action_space.high)
             acs.append(action)
             img1_path = str(i) + "/img1/" + str(t) + ".jpg"
             img2_path = str(i) + "/img2/" + str(t) + ".jpg"

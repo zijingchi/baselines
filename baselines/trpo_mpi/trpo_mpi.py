@@ -37,7 +37,8 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     news = np.zeros(horizon, 'int32')
     acs = np.array([ac for _ in range(horizon)])
     prevacs = acs.copy()
-
+    suc = 0
+    episode = 0
     while True:
         prevac = ac
         ac, vpred, _, _ = pi.step(ob, stochastic=stochastic)
@@ -52,6 +53,9 @@ def traj_segment_generator(pi, env, horizon, stochastic):
             # Be careful!!! if you change the downstream algorithm to aggregate
             # several of these batches, then be sure to do a deepcopy
             ep_rets = []
+            logger.log('success rate:{}/{}'.format(suc, episode))
+            episode = 0
+            suc = 0
             ep_lens = []
         i = t % horizon
         obs[i] = ob
@@ -68,6 +72,9 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         if new:
             ep_rets.append(cur_ep_ret)
             ep_lens.append(cur_ep_len)
+            episode += 1
+            if rew > 0.5:
+                suc += 1
             cur_ep_ret = 0
             cur_ep_len = 0
             ob = env.reset()
