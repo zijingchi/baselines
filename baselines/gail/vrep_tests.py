@@ -1,13 +1,11 @@
 import os
-from baselines.gail.vrep_ur_env import UR5VrepEnvMultiObstacle
+from baselines.gail.vrep_ur_env import UR5VrepEnv, tipcoor
+import numpy as np
 
-env = UR5VrepEnvMultiObstacle()
-for i in range(10):
-    print(i)
-    n_path, path = env.reset_expert()
-    if path:
-        print('exists')
-        for j in range(n_path):
-            env.set_joints(path[j])
-            env.step_simulation()
+
+env = UR5VrepEnv()
+env.reset()
+env.set_joints(env.target_joint_pos)
+goal_tip = tipcoor(np.concatenate((env.target_joint_pos, np.zeros(6-env.dof))))
+env.obj_set_position(env.tip, goal_tip)
 env.close()

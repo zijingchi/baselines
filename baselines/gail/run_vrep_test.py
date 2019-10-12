@@ -7,7 +7,7 @@ import os.path as osp
 import logging
 from mpi4py import MPI
 from tqdm import tqdm
-from baselines.gail.vrep_ur_env import UR5VrepEnv, UR5VrepEnvMultiObstacle
+from baselines.gail.vrep_ur_env import UR5VrepEnv, UR5VrepEnvMultiObstacle, UR5VrepEnvDrtn
 import numpy as np
 import gym
 
@@ -70,12 +70,13 @@ def get_task_name(args):
 def main(args):
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = UR5VrepEnvMultiObstacle(l2_thresh=0.12)
+    #env = UR5VrepEnvMultiObstacle(l2_thresh=0.12)
+    env = UR5VrepEnvDrtn(l2_thresh=0.08)
     from baselines.common.wrappers import TimeLimit
     env = TimeLimit(env, max_episode_steps=100)
 
     def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
+        return mlp_policy.MLPD(name=name, ob_space=ob_space, ac_space=ac_space,
                                reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=3)
     env = bench.Monitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
@@ -134,7 +135,8 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
         pretrained_weight = behavior_clone_vrep.learn(env, policy_fn, dataset,
                                                       max_iters=BC_max_iter, ckpt_dir='checkpoint/BC', verbose=True)
     path = 'UR5PathPlanTRPO2/UR5PathPlanTRPO2'
-    pretrained_weight = "checkpoint/" + path
+    #pretrained_weight = "checkpoint/" + path
+    pretrained_weight = None
     if algo == 'trpo':
         #from baselines.gail import trpo_mpi4vrep
         from baselines.trpo_mpi import trpo_vrep
@@ -152,8 +154,8 @@ def train(env, seed, policy_fn, reward_giver, dataset, algo,
                         max_timesteps=num_timesteps,
                         ckpt_dir=checkpoint_dir, log_dir=log_dir,
                         save_per_iter=save_per_iter,
-                        timesteps_per_batch=768,
-                        max_kl=0.01, cg_iters=30, cg_damping=0.5,
+                        timesteps_per_batch=1024,
+                        max_kl=0.01, cg_iters=15, cg_damping=0.5,
                         gamma=0.995, lam=0.97,
                         vf_iters=5, vf_stepsize=1e-2,
                         task_name=task_name)
