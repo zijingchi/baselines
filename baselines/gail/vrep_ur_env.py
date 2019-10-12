@@ -99,6 +99,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
                             'target': self.target_joint_pos,
                             'obstacle_ori': self.obstacle_ori,
                             'obstacle_pos1': self.obstacle_pos}
+        self.distance = self.read_distance(self.distance_handle)
         if self.enable_cameras:
             img1 = self.obj_get_vision_image(self.camera1)
             img2 = self.obj_get_vision_image(self.camera2)
@@ -137,7 +138,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
         self.step_simulation()
         self._make_observation()
         self.collision_check = self.read_collision(self.collision_handle) or abs(self.observation['joint'][2])>5*pi/6
-        self.distance = self.read_distance(self.distance_handle)
+
         if isinstance(self.observation_space, spaces.Box):
             cfg = self.observation[:self.dof]
         else:
@@ -185,15 +186,15 @@ class UR5VrepEnv(UR5VrepEnvBase):
 
         self.step_simulation()
         ob = self._make_observation()
-
+        self.last_dis = self.distance
         return ob
 
     def reset_obstacle(self):
-        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6-self.dof))))
-        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6-self.dof))))
+        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(5-self.dof))))[-3:]
+        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(5-self.dof))))[-3:]
         alpha = 0.5
         obs_pos = alpha*init_tip + (1-alpha)*goal_tip
-        obs_pos += np.concatenate((0.2*np.random.randn(2), np.array([0.25*np.random.rand()+0.18])))
+        obs_pos += np.concatenate((0.2*np.random.randn(2), np.array([0.25*np.random.rand()-0.05])))
         obs_ori = 0.2*np.random.randn(3)
         obs_ori[2] += pi/2
 
@@ -328,12 +329,13 @@ def ur5fk(thetas):
     d1 = 8.92e-2
     d2 = 0.11
     d5 = 9.475e-2
-    d6 = 7.495e-2
+    d6 = 1.1495e-1
     a2 = 4.251e-1
     a3 = 3.9215e-1
+    d0 = 0.3
     All = np.zeros((6, 4, 4))
     All[:, 3, 3] = 1
-    for i in range(6):
+    for i in range(5):
         All[i, 0, 0] = np.cos(thetas[i])
         All[i, 0, 1] = -np.sin(thetas[i])
     All[0, 1, 0] = np.sin(thetas[0])
@@ -369,17 +371,19 @@ def ur5fk(thetas):
     A0[1, 0] = -1
     A0[2, 2] = 1
     A0[3, 3] = 1
-    A0[2, 3] = 0
+    A0[2, 3] = d0
     return All, A0
 
 
 def tipcoor(thetas):
-    thetas_0 = np.array([0, pi / 2, 0, pi / 2, pi, 0])
+    thetas_0 = np.array([0, pi / 2, 0, pi / 2, pi])
     thetas = thetas + thetas_0
     All, A0 = ur5fk(thetas)
+    ps = []
     for A in All:
         A0 = A0 @ A
-    return A0[:3, 3]
+        ps.extend(A0[:3, 3])
+    return np.array(ps)
 
 
 class UR5VrepEnvMultiObstacle(UR5VrepEnv):
@@ -436,11 +440,11 @@ class UR5VrepEnvMultiObstacle(UR5VrepEnv):
         return self.observation
 
     def reset_obstacle(self):
-        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6 - self.dof))))
-        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6 - self.dof))))
+        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6 - self.dof))))[-3:]
+        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6 - self.dof))))[-3:]
         alpha = 0.5
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
+        obs_pos += np.concatenate((0.2 * np.random.randn(2), np.array([0.25 * np.random.rand() - 0.05])))
 
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos1'].low,
                                     self.observation_space.spaces['obstacle_pos1'].high)
@@ -493,6 +497,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         """
         joint_angles = [self.obj_get_joint_angle(joint) for joint in self.oh_joint]
         self.distance = self.read_distance(self.distance_handle)
+        self.tip_pos = self.obj_get_position(self.tip)
         self.observation = np.concatenate([np.array(joint_angles).astype('float32'),
                                            self.target_joint_pos,
                                            self.obstacle_pos,
@@ -502,13 +507,13 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         return self.observation
 
     def reset_obstacle(self):
-        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6 - 5))))
-        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6-5))))
+        init_tip = tipcoor(self.init_joint_pos)[-3:]
+        goal_tip = tipcoor(self.target_joint_pos)[-3:]
         alpha = 0.5
         #obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
         #obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.25 * np.random.rand() + 0.28])))
+        obs_pos += np.concatenate((0.2 * np.random.randn(2), np.array([0.25 * np.random.rand() - 0.05])))
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[5*2:5*2+3],
                                     self.observation_space.high[5*2:5*2+3])
 
@@ -532,7 +537,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
     def step(self, ac):
         # self._make_observation()
         ac = self._action_process(ac)
-        ac = np.clip(ac, self.action_space.low, self.action_space.high)
+        #ac = np.clip(ac, self.action_space.low, self.action_space.high)
         invalid = not self._make_action(ac)
         self.step_simulation()
         self._make_observation()
@@ -550,18 +555,34 @@ class UR5VrepEnvConcat(UR5VrepEnv):
             info["status"] = 'collide'
         else:
             info["status"] = 'running'
+        self.last_dis = self.distance
         return self.observation, reward, done, info
 
     def compute_reward(self, state, action):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
+        pre_tip_pos = tipcoor(state-action)
+        epsilon = 0.001
+        obs_dis_incre = self.distance - self.last_dis
+        if np.linalg.norm(pre_tip_pos)-np.linalg.norm(self.tip_pos)>epsilon:  # tip is approaching target
+            if obs_dis_incre<-epsilon:  # approaching obstacle
+                approaching = 0.01
+            else:
+                approaching = 0.05
+        elif np.linalg.norm(pre_tip_pos)-np.linalg.norm(self.tip_pos)<-epsilon:  # tip is away from target
+            if obs_dis_incre<-epsilon:  # approaching obstacle
+                approaching = -0.08
+            else:
+                approaching = -0.01
+        else:
+            approaching = 0
         # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
-        approach = 2 if config_dis < 1.5 * self.l2_thresh else 0
+        reach = 2 if config_dis < 1.5 * self.l2_thresh else 0
         collision = -1 if self.collision_check else 0
-        danger = -0.01 if self.distance < 2e-2 else 0
+        danger = -0.01 if self.distance < 1e-2 else 0
         valid = (self.observation_space.low[:5] < state).all() and (
                     self.observation_space.high[:5] > state).all()
         invalid = -1 if not valid else 0
-        return approach + collision + invalid
+        return reach + collision + invalid + approaching + danger
 
 
 class UR5VrepEnvDrtn(UR5VrepEnv):

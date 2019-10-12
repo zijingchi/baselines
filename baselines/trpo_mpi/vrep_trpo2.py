@@ -8,6 +8,7 @@ import datetime
 import gym
 import baselines.common.tf_util as U
 from baselines.gail.vrep_ur_env import UR5VrepEnvConcat
+from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
 from baselines.common.distributions import make_pdtype
 from baselines.acktr.utils import dense
 import tensorflow as tf
@@ -42,7 +43,7 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvConcat(server_port=19997, l2_thresh=0.08)
+        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)
@@ -51,8 +52,8 @@ def main():
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
         seed=1, network='mlp',
-        total_timesteps=2e5, ent_coef=0.0, max_kl=0.01, cg_iters=15, cg_damping=0.1, vf_stepsize=3e-4,
-        num_hidden=128, num_layers=3, timesteps_per_batch=1024)
+        total_timesteps=3e5, ent_coef=0.0, max_kl=0.01, cg_iters=10, cg_damping=0.1, vf_stepsize=3e-4,
+        num_hidden=128, num_layers=3, timesteps_per_batch=1600)
     save_path = './cpt'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)
