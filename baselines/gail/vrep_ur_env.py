@@ -187,7 +187,11 @@ class UR5VrepEnv(UR5VrepEnvBase):
         self.step_simulation()
         ob = self._make_observation()
         self.last_dis = self.distance
+        self.target_tip_pos = tip_pos
         return ob
+
+    def _tip_dis(self, cfg):
+        return np.linalg.norm(tipcoor(cfg)[-3:]-self.target_tip_pos)
 
     def reset_obstacle(self):
         init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(5-self.dof))))[-3:]
@@ -560,19 +564,21 @@ class UR5VrepEnvConcat(UR5VrepEnv):
 
     def compute_reward(self, state, action):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
-        pre_tip_pos = tipcoor(state-action)
         epsilon = 0.001
         obs_dis_incre = self.distance - self.last_dis
-        if np.linalg.norm(pre_tip_pos)-np.linalg.norm(self.tip_pos)>epsilon:  # tip is approaching target
+        tip_dis_incre = self._tip_dis(state-action)-self._tip_dis(state)
+        if tip_dis_incre>epsilon:  # tip is approaching target
             if obs_dis_incre<-epsilon:  # approaching obstacle
                 approaching = 0.01
             else:
                 approaching = 0.05
-        elif np.linalg.norm(pre_tip_pos)-np.linalg.norm(self.tip_pos)<-epsilon:  # tip is away from target
+        elif tip_dis_incre<-epsilon:  # tip is away from target
             if obs_dis_incre<-epsilon:  # approaching obstacle
                 approaching = -0.08
             else:
                 approaching = -0.01
+            if self._tip_dis(state)<0.2:
+                approaching *= 2
         else:
             approaching = 0
         # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
