@@ -157,6 +157,7 @@ class UR5VrepEnvKine(UR5VrepEnvConcat):
         self.distance = self.read_distance(self.distance_handle)
         self.tip_pos = self.obj_get_position(self.tip)
         ps = tipcoor(joint_angles)
+        # todo: replace the exact distance by a rough interval
         self.observation = np.concatenate([np.array(joint_angles).astype('float32'),
                                            self.target_joint_pos,
                                            self.obstacle_pos,
@@ -172,6 +173,6 @@ class UR5VrepEnvKine(UR5VrepEnvConcat):
         ac = np.linalg.pinv(J)@ac
         cfg = self._config()
         ac += self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
-
+        # todo: add a coefficient to reduce the norm of action while near the target
         return ac
 

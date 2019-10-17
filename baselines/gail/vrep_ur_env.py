@@ -188,6 +188,8 @@ class UR5VrepEnv(UR5VrepEnvBase):
         ob = self._make_observation()
         self.last_dis = self.distance
         self.target_tip_pos = tip_pos
+        self.prev_ac = -1
+        self.t = 0
         return ob
 
     def _tip_dis(self, cfg):
@@ -232,6 +234,8 @@ class UR5VrepEnv(UR5VrepEnvBase):
         n_path, expert_path, _ = self._calPathThroughVrep(self.cID, 50, self.init_joint_pos.tolist() + self.target_joint_pos.tolist(), bytearray())
         if n_path>0:
             self._set_path_draw(np.array(expert_path), 'wall4', 2)
+        else:
+            print('expert path not found')
         time.sleep(1)
         #self.call_childscript_function('Dummy', 'rmvDraw_remote', [[linear_handle, policy_handle], [], [], bytearray()])
 
@@ -513,11 +517,11 @@ class UR5VrepEnvConcat(UR5VrepEnv):
     def reset_obstacle(self):
         init_tip = tipcoor(self.init_joint_pos)[-3:]
         goal_tip = tipcoor(self.target_joint_pos)[-3:]
-        alpha = 0.5
+        alpha = 0.4 + 0.2*np.random.randn()
         #obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
         #obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        obs_pos += np.concatenate((0.2 * np.random.randn(2), np.array([0.25 * np.random.rand() - 0.05])))
+        obs_pos += np.concatenate((0.08 * np.random.randn(2), np.array([0.25 * np.random.rand() - 0.05])))
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[5*2:5*2+3],
                                     self.observation_space.high[5*2:5*2+3])
 
@@ -560,6 +564,8 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         else:
             info["status"] = 'running'
         self.last_dis = self.distance
+        self.prev_ac = ac
+        self.t += 1
         return self.observation, reward, done, info
 
     def compute_reward(self, state, action):
@@ -569,14 +575,16 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         tip_dis_incre = self._tip_dis(state-action)-self._tip_dis(state)
         if tip_dis_incre>epsilon:  # tip is approaching target
             if obs_dis_incre<-epsilon:  # approaching obstacle
-                approaching = 0.01
+                approaching = 0.04
             else:
-                approaching = 0.05
+                approaching = 0.1
         elif tip_dis_incre<-epsilon:  # tip is away from target
             if obs_dis_incre<-epsilon:  # approaching obstacle
-                approaching = -0.08
+                approaching = -0.2
+            elif self.distance>0.1:
+                approaching = -0.15
             else:
-                approaching = -0.01
+                approaching = -0.1
             if self._tip_dis(state)<0.2:
                 approaching *= 2
         else:

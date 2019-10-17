@@ -30,6 +30,17 @@ def constfn(val):
     return f
 
 
+def runner(env, times, load_path=None):
+    suc = 0
+    for i in range(times):
+        env.reset()
+        n_mid = 50
+        linear_res = env.directly_towards(n_mid)
+        if linear_res == 0:
+            suc += 1
+    print('{}/{}'.format(suc, times))
+
+
 def main():
     if MPI is None or MPI.COMM_WORLD.Get_rank() == 0:
         rank = 0
@@ -52,12 +63,13 @@ def main():
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
         seed=1, network='mlp',
-        total_timesteps=3e5, ent_coef=0.0, max_kl=0.01, cg_iters=10, cg_damping=0.1, vf_stepsize=3e-4,
-        num_hidden=128, num_layers=3, timesteps_per_batch=1600)
-    save_path = './cpt'
+        total_timesteps=1e5, ent_coef=0.0, max_kl=0.001, cg_iters=10, cg_damping=0.04, vf_stepsize=3e-4,
+        num_hidden=200, num_layers=3, timesteps_per_batch=1600, load_path='./best/cpt')
+    save_path = './cpt2'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)
         model.save(save_path)
+    #runner(env.envs[0], 200)
     env.close()
 
 

@@ -262,7 +262,8 @@ def learn(*,
 
     U.initialize()
     if load_path is not None:
-        pi.load(load_path)
+        #pi.load(load_path)
+        U.load_variables(load_path, all_var_list)
 
     th_init = get_flat()
     if MPI is not None:
@@ -289,6 +290,8 @@ def learn(*,
 
     assert sum([max_iters>0, total_timesteps>0, max_episodes>0]) < 2, \
         'out of max_iters, total_timesteps, and max_episodes only one should be specified'
+
+    bestreward = -2
 
     while True:
         if callback: callback(locals(), globals())
@@ -395,6 +398,9 @@ def learn(*,
 
         if rank==0:
             logger.dump_tabular()
+
+        if np.mean(rewbuffer)>bestreward:
+            U.save_variables('./best/cpt', all_var_list)
 
     return pi
 
