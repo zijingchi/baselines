@@ -101,7 +101,7 @@ class DiagGaussianPdType(PdType):
 
     def pdfromlatent(self, latent_vector, init_scale=1.0, init_bias=0.0):
         mean = _matching_fc(latent_vector, 'pi', self.size, init_scale=init_scale, init_bias=init_bias)
-        logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.constant_initializer(-3))
+        logstd = tf.get_variable(name='pi/logstd', shape=[1, self.size], initializer=tf.constant_initializer([-2.6, -2.6, -2.6, -3, -3]))
         pdparam = tf.concat([mean, mean * 0.0 + logstd], axis=1)
         return self.pdfromflat(pdparam), mean
 
@@ -123,9 +123,10 @@ class MultiDiagGaussianPdType(PdType):
     def pdfromlatent(self, latent_vector, init_scale=1.0, init_bias=0.0):
         means = _matching_fc(latent_vector, 'pi', self.size*self.n_mix, init_scale=init_scale, init_bias=init_bias)
         allmean = tf.split(axis=len(means.shape)-1, num_or_size_splits=self.n_mix, value=means)
-        logstds = tf.get_variable(name='pi/logstd_all', shape=[1, self.size*self.n_mix], initializer=tf.zeros_initializer())
+        logstds = tf.get_variable(name='pi/logstd_all', shape=[1, self.size*self.n_mix], initializer=tf.constant_initializer(-2.5))
         alllogstd = tf.split(axis=len(logstds.shape)-1, num_or_size_splits=self.n_mix, value=logstds)
-        pdparam = [allmean, alllogstd]
+        alphas = [tf.get_variable(name='pi/alpha'+str(i), shape=(), initializer=tf.constant_initializer(1/self.n_mix)) for i in range(self.n_mix)]
+        pdparam = [allmean, alllogstd, alphas]
         return self.pdfromflat(pdparam), allmean
 
     def param_shape(self):
@@ -244,7 +245,7 @@ class MultiCategoricalPd(Pd):
     def entropy(self):
         return tf.add_n([p.entropy() for p in self.categoricals])
     def sample(self):
-        return tf.cast(tf.stack([p.sample() for p in self.categoricals], axis=-1), tf.int32)
+        return tf.cast(tf.stack([p.sample() for p in self.categoricals], axis=1), tf.int32)
     @classmethod
     def fromflat(cls, flat):
         raise NotImplementedError
@@ -278,16 +279,23 @@ class DiagGaussianPd(Pd):
 class MultiDiagGaussianPd(Pd):
     def __init__(self, flat):
         self.flat = flat
+        assert isinstance(flat, list)
         assert len(flat[0])==len(flat[1])
-        self.means = flat[0]
-        self.logstds = flat[1]
-        self.n_mix = len(flat[0])
-        self.std = [tf.exp(tt) for tt in self.logstds]
+        self.alphas = flat[2]
+        self.n_mix = len(self.alphas)
+        self.diaggaussians = []
+        for i in range(self.n_mix):
+            self.diaggaussians.append(DiagGaussianPd(tf.concat((flat[0][i], flat[1][i]), axis=-1)))
 
     def flatparam(self):
         return self.flat
     def mode(self):
-        return self.means
+        return [g.mode() for g in self.diaggaussians]
+    def neglogp(self, x):
+        return tf.reduce_sum([a*g.neglogp(x) for a, g in zip(self.alphas, self.diaggaussians)])
+    '''there is no expressive solution for kl divergence of mixture gaussian distribution'''
+    def kl(self, other):
+        pass
 
 class BernoulliPd(Pd):
     def __init__(self, logits):

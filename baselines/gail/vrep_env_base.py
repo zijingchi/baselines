@@ -52,7 +52,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
         self.collision_handle = self.get_collision_handle('Collision1')
         #self.self_col_handle = self.get_collision_handle('SelfCollision')
         joint_space = np.ones(self.dof)
-        self.action_space = spaces.Box(low=-0.24*joint_space, high=0.24*joint_space)
+        self.action_space = spaces.Box(low=-0.1*joint_space, high=0.1*joint_space)
         #self._make_obs_space()
 
         self.seed(random_seed)

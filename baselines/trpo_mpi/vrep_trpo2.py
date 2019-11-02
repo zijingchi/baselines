@@ -54,18 +54,26 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08)
+        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08, random_seed=10)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)
         return env
-
+    '''env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08)
+    suc = 0
+    for i in range(40):
+        npath, final_path = env.reset_expert()
+        if npath>0:
+            print('success')
+            suc += 1
+    print(suc/40)
+    env.close()'''
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
-        seed=1, network='mlp',
-        total_timesteps=1e5, ent_coef=0.0, max_kl=0.001, cg_iters=10, cg_damping=0.04, vf_stepsize=3e-4,
-        num_hidden=200, num_layers=3, timesteps_per_batch=1600, load_path='./best/cpt')
-    save_path = './cpt2'
+                  seed=10, network='mlp',
+                  total_timesteps=2e5, ent_coef=0.001, max_kl=0.004, cg_iters=10, cg_damping=0.08, vf_stepsize=3e-4,
+                  num_hidden=200, num_layers=3, timesteps_per_batch=2048, load_path='./best/cpt4')
+    save_path = './cpt0'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)
         model.save(save_path)

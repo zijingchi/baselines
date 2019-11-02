@@ -2,6 +2,8 @@ import gym
 from baselines.gail.vrep_ur_env import UR5VrepEnvConcat, tipcoor
 import autograd.numpy as anp
 import numpy as np
+import os
+import pickle
 from autograd import jacobian
 
 pi = np.pi
@@ -125,9 +127,9 @@ class UR5VrepEnvKine(UR5VrepEnvConcat):
                  dof=5,
                  ):
         super(UR5VrepEnvKine, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_seed, dof)
-        self.jacob = jacobian(ur5fk)
+        #self.jacob = jacobian(ur5fk)
         ac_space_bound = np.array([0.05, 0.05, 0.05, 0.12, 0.12, 0.12])
-        self.action_space = gym.spaces.Box(low=-ac_space_bound, high=ac_space_bound)
+        #self.action_space = gym.spaces.Box(low=-ac_space_bound, high=ac_space_bound)
         self._make_obs_space()
 
     def _make_action(self, a):
@@ -149,8 +151,8 @@ class UR5VrepEnvKine(UR5VrepEnvConcat):
         obstalce_pos_hbound = np.array([5, 5, 2])
         pos_lbound = np.array([-1.2, -1.2, -0.2]*4)
         pos_hbound = np.array([1.2, 1.2, 1.3] * 4)
-        self.observation_space = gym.spaces.Box(low=np.concatenate([joint_lbound, joint_lbound, obstacle_pos_lbound, pos_lbound, np.array([0])]),
-                                                high=np.concatenate([joint_hbound, joint_hbound, obstalce_pos_hbound, pos_hbound, np.array([2])]))
+        self.observation_space = gym.spaces.Box(low=np.concatenate([joint_lbound, joint_lbound, obstacle_pos_lbound, pos_lbound]),
+                                                high=np.concatenate([joint_hbound, joint_hbound, obstalce_pos_hbound, pos_hbound]))
 
     def _make_observation(self):
         joint_angles = [self.obj_get_joint_angle(joint) for joint in self.oh_joint]
@@ -162,17 +164,80 @@ class UR5VrepEnvKine(UR5VrepEnvConcat):
                                            self.target_joint_pos,
                                            self.obstacle_pos,
                                            ps[3:-3],
-                                           np.array([self.distance])
+                                           #np.array([self.distance])
                                            ])
 
         return self.observation
 
     def _action_process(self, ac):
-        J = self.jacob(self._config())
-        ac = np.clip(ac, self.action_space.low, self.action_space.high)
-        ac = np.linalg.pinv(J)@ac
+        #J = self.jacob(self._config())
+        #ac = np.clip(ac, self.action_space.low, self.action_space.high)
+        #ac = np.linalg.pinv(J)@ac
         cfg = self._config()
-        ac += self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
-        # todo: add a coefficient to reduce the norm of action while near the target
+        norm = np.linalg.norm(self.target_joint_pos - cfg)
+        if norm<self.l2_thresh*2:
+            c = 0.5
+        else:
+            c = 1
+        ac += c*self.l2_thresh * (self.target_joint_pos - cfg) / norm
+        ac = np.clip(ac, self.action_space.low, self.action_space.high)
         return ac
 
+
+class UR5VrepEnvKineLoad(UR5VrepEnvKine):
+    def __init__(self,
+                 expert_path,
+                 server_addr='127.0.0.1',
+                 server_port=19997,
+                 scene_path=None,
+                 l2_thresh=0.1,
+                 random_seed=0,
+                 dof=5,
+                 ):
+        super(UR5VrepEnvKineLoad, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_seed, dof)
+        self.expert_data_path = expert_path
+        self.i = 0
+        self._load_expert_data()
+        self.expert_path = []
+
+    def _load_expert_data(self):
+        dirlist = os.listdir(self.expert_data_path)
+        self.pkllist = []
+        for d in dirlist:
+            pkl = os.path.join(self.expert_data_path, d, 'data.pkl')
+            if os.path.exists(pkl):
+                self.pkllist.append(pkl)
+
+    def reset(self):
+        if self.sim_running:
+            self.stop_simulation()
+        while self.sim_running:
+            self.stop_simulation()
+
+        pklfile = self.pkllist[self.i]
+        self.i = (self.i+1)%len(self.pkllist)
+        with open(pklfile, 'rb') as f:
+            data = pickle.load(f)
+            inits = data['inits']
+            self.init_joint_pos = inits['init_joint_pos']
+            self.target_joint_pos = inits['target_joint_pos']
+            self.obstacle_pos = inits['obstacle_pos']
+            self.expert_path = data['observations']
+        self.obstacle_ori = np.zeros(3)
+        self.start_simulation()
+        self.set_joints(self.init_joint_pos)
+        self.init_goal_dis = self._angle_dis(self.init_joint_pos, self.target_joint_pos, 5)
+        self.obj_set_position(self.obstacle, self.obstacle_pos)
+
+        tip_pos = self.obj_get_position(self.tip)
+        tip_ori = self.obj_get_orientation(self.tip)
+        self.obj_set_position(self.goal_viz, tip_pos)
+        self.obj_set_orientation(self.goal_viz, tip_ori)
+
+        self.step_simulation()
+        ob = self._make_observation()
+        self.last_dis = self.distance
+        self.target_tip_pos = tip_pos
+        self.prev_ac = -1
+        self.t = 0
+        return ob
