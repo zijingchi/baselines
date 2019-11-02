@@ -8,7 +8,7 @@ pi = np.pi
 
 
 def main(args):
-    workpath = 'dataset/ur5expert3/'
+    workpath = 'dataset/ur5expert4/'
     if not os.path.exists(workpath):
         os.mkdir(workpath)
     dirlist = os.listdir(workpath)
@@ -18,9 +18,9 @@ def main(args):
     else:
         maxdir = max(numlist)
     os.chdir(workpath)
-    env = UR5VrepEnv(dof=5, enable_cameras=True, l2_thresh=0.08, random_seed=3)
+    env = UR5VrepEnv(dof=5, l2_thresh=0.08, random_seed=3, enable_cameras=True)
     i = maxdir + 1
-    while i < maxdir + 1000:
+    while i < maxdir + 2000:
         print('iter:', i)
         n_path, path = env.reset_expert()
         if n_path==0: continue
@@ -31,11 +31,13 @@ def main(args):
         os.mkdir(str(i) + "/img2")
         os.mkdir(str(i) + "/img3")
         obs = []
+        dis = []
         acs = []
         for t in range(n_path-1):
             action = path[t+1] - path[t]
             observation, _, done, _ = env.step(action)
             obs.append(observation['joint'])
+            dis.append(env.distance)
             #ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
             #action = np.clip(action, env.action_space.low, env.action_space.high)
             acs.append(action)
@@ -45,7 +47,7 @@ def main(args):
             cv2.imwrite(img1_path, observation['image1'])
             cv2.imwrite(img2_path, observation['image2'])
             cv2.imwrite(img3_path, observation['image3'])
-        data = {'inits': init, 'observations': obs, 'actions': acs}
+        data = {'inits': init, 'observations': [obs, dis], 'actions': acs}
         with open(str(i) + '/data.pkl', 'wb') as f:
             pickle.dump(data, f)
         i = i + 1

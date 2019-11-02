@@ -54,7 +54,7 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08)
+        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08, random_seed=61)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)

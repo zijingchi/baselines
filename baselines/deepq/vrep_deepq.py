@@ -23,29 +23,30 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvDis(server_port=19997, l2_thresh=0.08, num_per_dim=5, dof=3, discrete_stepsize=0.03)
+        env = UR5VrepEnvDis(server_port=19997, l2_thresh=0.08, num_per_dim=5, dof=3, discrete_stepsize=0.03, random_seed=5)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)
         return env
 
     env = DummyVecEnv([env_fn])
-    model = learn(env, 'mlp', seed=1,
-                  total_timesteps=50000, buffer_size=10000,
-                  exploration_fraction=0.2,
-                  exploration_final_eps=0.1,
-                  train_freq=1,
-                  batch_size=64,
+    model = learn(env, 'mlp', seed=5, lr=1e-4,
+                  total_timesteps=200000, buffer_size=50000,
+                  exploration_fraction=0.4,
+                  exploration_final_eps=0.05,
+                  train_freq=16,
+                  batch_size=512,
                   print_freq=50,
-                  checkpoint_freq=10000,
-                  checkpoint_path=None,
+                  checkpoint_freq=1000,
+                  checkpoint_path='./tmpcpt5',  # tmpcpt3 holds a good performance, mlp:[256, 128, 128, 64]
                   learning_starts=1000,
-                  gamma=0.95,
-                  target_network_update_freq=50,
+                  gamma=0.9,
+                  target_network_update_freq=128,
                   prioritized_replay=True,
                   prioritized_replay_alpha=0.6,
                   prioritized_replay_beta0=0.4,
-                  prioritized_replay_eps=1e-6,)
+                  prioritized_replay_eps=1e-5,
+                  load_path='./tmpcpt5/model', hiddens=[512, 256, 256, 128])
     save_path = './cpt'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)

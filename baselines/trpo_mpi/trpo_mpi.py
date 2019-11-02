@@ -400,7 +400,7 @@ def learn(*,
             logger.dump_tabular()
 
         if np.mean(rewbuffer)>bestreward:
-            U.save_variables('./best/cpt', all_var_list)
+            U.save_variables('./best/cpt2', all_var_list)
 
     return pi
 

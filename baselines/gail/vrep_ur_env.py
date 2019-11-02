@@ -161,11 +161,11 @@ class UR5VrepEnv(UR5VrepEnvBase):
         while self.sim_running:
             self.stop_simulation()
 
-        init_w = [0.1, 0.1, 0.1, 0.2, 0.2]
+        init_w = np.array([0.1, 0.1, 0.1, 0.2, 0.2])*0.5
         self.init_joint_pos = np.array([0, -pi / 6, -3 * pi / 4, 0, pi / 2])
         self.target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
-        init_joint_pos = self.init_joint_pos + np.multiply(init_w, np.random.randn(5))
-        target_joint_pos = self.target_joint_pos + np.multiply(init_w, np.random.randn(5))
+        init_joint_pos = self.init_joint_pos + np.multiply(init_w, 0.5-np.random.rand(5))
+        target_joint_pos = self.target_joint_pos + np.multiply(init_w, 0.5-np.random.rand(5))
         self.start_simulation()
         while abs(init_joint_pos[2])>5*pi/6 or abs(target_joint_pos[2])>5*pi/6:
             init_joint_pos[2] = self.init_joint_pos[2] + init_w[2]*np.random.randn()
@@ -214,8 +214,10 @@ class UR5VrepEnv(UR5VrepEnvBase):
         self.obj_set_position(self.obstacle, self.obstacle_pos)
         self.obj_set_orientation(self.obstacle, self.obstacle_ori)
         col1 = self._check_collision(self.target_joint_pos, self.collision_handle)
+        init_tip_obs_dis = np.linalg.norm(self.obj_get_position(self.tip)-self.obstacle_pos)
         col2 = self._check_collision(self.init_joint_pos, self.collision_handle)
-        return col1 or col2
+        target_tip_obs_dis = np.linalg.norm(self.obj_get_position(self.tip) - self.obstacle_pos)
+        return col1 or col2 or min(init_tip_obs_dis, target_tip_obs_dis)<0.1
 
     def _set_path_draw(self, path, obj, icolor=3):
         l = len(path)
@@ -450,10 +452,10 @@ class UR5VrepEnvMultiObstacle(UR5VrepEnv):
     def reset_obstacle(self):
         init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(6 - self.dof))))[-3:]
         goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(6 - self.dof))))[-3:]
-        alpha = 0.5
+        alpha = 0.4 + 0.3*np.random.randn()
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        obs_pos += np.concatenate((0.2 * np.random.randn(2), np.array([0.25 * np.random.rand() - 0.05])))
-
+        obs_pos += np.concatenate((0.14 * np.random.randn(2), np.array([0.30 * np.random.rand() - 0.05])))
+        obs_pos[0] += 0.1*np.random.rand()
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.spaces['obstacle_pos1'].low,
                                     self.observation_space.spaces['obstacle_pos1'].high)
 
@@ -497,8 +499,10 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         obstalce_pos_hbound = np.array([5, 5, 2])
         dis_lb = np.array([-5])
         dis_hb = np.array([5])
-        self.observation_space = gym.spaces.Box(low=np.concatenate([joint_lbound, joint_lbound, obstacle_pos_lbound]),
-                                                high=np.concatenate([joint_hbound, joint_hbound, obstalce_pos_hbound]))
+        pos_lbound = np.array([-1.2, -1.2, -0.2] * 4)
+        pos_hbound = np.array([1.2, 1.2, 1.3] * 4)
+        self.observation_space = gym.spaces.Box(low=np.concatenate([joint_lbound, joint_lbound, obstacle_pos_lbound, pos_lbound]),
+                                                high=np.concatenate([joint_hbound, joint_hbound, obstalce_pos_hbound, pos_hbound]))
 
     def _make_observation(self):
         """Get observation from v-rep and stores in self.observation
@@ -506,9 +510,11 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         joint_angles = [self.obj_get_joint_angle(joint) for joint in self.oh_joint]
         self.distance = self.read_distance(self.distance_handle)
         self.tip_pos = self.obj_get_position(self.tip)
+        ps = tipcoor(joint_angles)
         self.observation = np.concatenate([np.array(joint_angles).astype('float32'),
                                            self.target_joint_pos,
                                            self.obstacle_pos,
+                                           ps[3:-3],
                                            #np.array([self.distance])
                                            ])
 
@@ -518,15 +524,15 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         init_tip = tipcoor(self.init_joint_pos)[-3:]
         goal_tip = tipcoor(self.target_joint_pos)[-3:]
         alpha = 0.4 + 0.2*np.random.randn()
-        #obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        #obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
+        # obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        obs_pos += np.concatenate((0.08 * np.random.randn(2), np.array([0.25 * np.random.rand() - 0.05])))
+        obs_pos += np.concatenate((0.2 * (0.5-np.random.rand(2)), np.array([0.4 * (0.5-np.random.rand()) + 0.05])))
+        obs_pos[0] += 0.2*(0.5-np.random.rand())  # np.random.rand()
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[5*2:5*2+3],
                                     self.observation_space.high[5*2:5*2+3])
 
         offset = np.concatenate((np.random.randn(2), np.random.rand(1)))
-        self.obstacle_pos2 = self.obstacle_pos + 0.2*offset/np.linalg.norm(offset)
+        #self.obstacle_pos2 = self.obstacle_pos + 0.2*offset/np.linalg.norm(offset)
 
     def _config(self):
         return self.observation[:5]
@@ -581,16 +587,18 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         elif tip_dis_incre<-epsilon:  # tip is away from target
             if obs_dis_incre<-epsilon:  # approaching obstacle
                 approaching = -0.2
-            elif self.distance>0.1:
+            elif self.distance>0.15:
                 approaching = -0.15
             else:
                 approaching = -0.1
-            if self._tip_dis(state)<0.2:
+            if tip_dis_incre<-0.1:
+                approaching -= 0.2
+            if self._tip_dis(state)<0.1:
                 approaching *= 2
         else:
             approaching = 0
         # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
-        reach = 2 if config_dis < 1.5 * self.l2_thresh else 0
+        reach = 1 if config_dis < 1.5 * self.l2_thresh else 0
         collision = -1 if self.collision_check else 0
         danger = -0.01 if self.distance < 1e-2 else 0
         valid = (self.observation_space.low[:5] < state).all() and (
