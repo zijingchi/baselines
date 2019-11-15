@@ -3,13 +3,17 @@ import functools
 
 from baselines.common.tf_util import get_session, save_variables, load_variables
 from baselines.common.tf_util import initialize
-from baselines.gail.bc_vrep import bc_train, bc_val
+#from baselines.gail.bc_vrep import bc_train, bc_val, bc_learn
 try:
     from baselines.common.mpi_adam_optimizer import MpiAdamOptimizer
     from mpi4py import MPI
     from baselines.common.mpi_util import sync_from_root
 except ImportError:
     MPI = None
+
+VREP = True
+if VREP:
+    from baselines.gail.bc_vrep import bc_train, bc_val, bc_learn
 
 class Model(object):
     """
@@ -41,9 +45,15 @@ class Model(object):
                 train_model = policy(nbatch_train, nsteps, sess)
             else:
                 train_model = policy(microbatch_size, nsteps, sess)
-            bc_train('../gail/dataset/ur5expert3', 'ppo2_model', train_model, 1e-3, './ckpt/concat128', nbatch_train, 1000, 5, 0.08, 50)
-            if env:
-                bc_val(env, act_model, 100)
+            if VREP:
+                #bc_train('../gail/dataset/ur5expert3', 'ppo2_model', train_model, 1e-3, './ckpt/concat128', nbatch_train, 1000, 5, 0.08, 50)
+                bc_learn(train_model, '/home/czj/Downloads/ur5expert', train_model.X, train_model.pdtype.sample_placeholder([None]),
+                         [v for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'ppo2_model')],   #if v.name.find('/vf')==-1
+                         max_iters=1200, optim_batch_size=nbatch_train, verbose=True,
+                         #ckpt_dir='/home/czj/Downloads/ur5expert'
+                         )
+                if env:
+                    bc_val(env, act_model, 100)
 
         # CREATE THE PLACEHOLDERS
         self.A = A = train_model.pdtype.sample_placeholder([None])

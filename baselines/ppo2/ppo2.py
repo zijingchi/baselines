@@ -11,7 +11,7 @@ try:
 except ImportError:
     MPI = None
 from baselines.ppo2.runner import Runner
-
+from baselines.ppo2.runner import VREP
 
 def constfn(val):
     def f(_):
@@ -141,7 +141,8 @@ def learn(*, network, env, total_timesteps, eval_env=None, seed=None, nsteps=204
         # Get minibatch
         obs, returns, masks, actions, values, neglogpacs, states, epinfos, sucinfos = runner.run() #pylint: disable=E0632
         #suc_rate = sum(sucinfos)/len(sucinfos)
-        logger.log('success rate:{:d}/{:d}'.format(sum(sucinfos), len(sucinfos)))
+        if VREP:
+            logger.log('success rate:{:d}/{:d}'.format(sum(sucinfos), len(sucinfos)))
         if eval_env is not None:
             eval_obs, eval_returns, eval_masks, eval_actions, eval_values, eval_neglogpacs, eval_states, eval_epinfos = eval_runner.run() #pylint: disable=E0632
 

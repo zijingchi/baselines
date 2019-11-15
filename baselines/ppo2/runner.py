@@ -1,5 +1,12 @@
 import numpy as np
 from baselines.common.runners import AbstractEnvRunner
+VREP = True
+
+if VREP:
+    from baselines.logger import get_dir
+    import os.path as osp
+    import pickle
+
 
 class Runner(AbstractEnvRunner):
     """
@@ -16,13 +23,15 @@ class Runner(AbstractEnvRunner):
         self.lam = lam
         # Discount rate
         self.gamma = gamma
+        self.count = 0
 
     def run(self):
         # Here, we init the lists that will contain the mb of experiences
         mb_obs, mb_rewards, mb_actions, mb_values, mb_dones, mb_neglogpacs = [],[],[],[],[],[]
         mb_states = self.states
         epinfos = []
-        sucinfos = []
+        if VREP:
+            sucinfos = []
         # For n in range number of steps
         for _ in range(self.nsteps):
             # Given observations, get action value and neglopacs
@@ -41,10 +50,11 @@ class Runner(AbstractEnvRunner):
             for info in infos:
                 maybeepinfo = info.get('episode')
                 if maybeepinfo: epinfos.append(maybeepinfo)
-                sucinfo = info.get('status')
-                if sucinfo and self.dones[0]:
-                    res = 1 if sucinfo=='reach' else 0
-                    sucinfos.append(res)
+                if VREP:
+                    sucinfo = info.get('status')
+                    if sucinfo and self.dones[0]:
+                        res = 1 if sucinfo=='reach' else 0
+                        sucinfos.append(res)
 
             mb_rewards.append(rewards)
         #batch of steps to batch of rollouts
@@ -70,8 +80,17 @@ class Runner(AbstractEnvRunner):
             delta = mb_rewards[t] + self.gamma * nextvalues * nextnonterminal - mb_values[t]
             mb_advs[t] = lastgaelam = delta + self.gamma * self.lam * nextnonterminal * lastgaelam
         mb_returns = mb_advs + mb_values
-        return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)),
+        if VREP:
+            data = [mb_obs, mb_actions, mb_rewards, mb_values, mb_advs, mb_neglogpacs, sucinfos]
+            pkl_path = osp.join(get_dir(), str(self.count)+'.pkl')
+            with open(pkl_path, 'wb') as f:
+                pickle.dump(data, f)
+            self.count += 1
+            return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)),
             mb_states, epinfos, sucinfos)
+        else:
+            return (*map(sf01, (mb_obs, mb_returns, mb_dones, mb_actions, mb_values, mb_neglogpacs)),
+            mb_states, epinfos)
 # obs, returns, masks, actions, values, neglogpacs, states = runner.run()
 def sf01(arr):
     """

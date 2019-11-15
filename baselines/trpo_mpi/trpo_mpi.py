@@ -11,6 +11,7 @@ from baselines.common.cg import cg
 from baselines.common.input import observation_placeholder
 from baselines.common.policies import build_policy
 from contextlib import contextmanager
+from baselines.gail.bc_vrep import bc_learn
 
 try:
     from mpi4py import MPI
@@ -110,6 +111,7 @@ def learn(*,
         max_episodes=0, max_iters=0,  # time constraint
         callback=None,
         load_path=None,
+        data_path=None,
         **network_kwargs
         ):
     '''
@@ -210,7 +212,9 @@ def learn(*,
     dist = meankl
 
     all_var_list = get_trainable_variables("pi")
-    # var_list = [v for v in all_var_list if v.name.split("/")[1].startswith("pol")]
+    if data_path:
+        var_list = [v for v in all_var_list if v.name.split("/")[1]=='pi']
+        savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=1000, verbose=True, ckpt_dir='best')
     # vf_var_list = [v for v in all_var_list if v.name.split("/")[1].startswith("vf")]
     var_list = get_pi_trainable_variables("pi")
     vf_var_list = get_vf_trainable_variables("pi")
@@ -399,7 +403,7 @@ def learn(*,
             logger.dump_tabular()
 
         if np.mean(rewbuffer)>bestreward:
-            U.save_variables('./best/cpt5', all_var_list)
+            U.save_variables('./best/cpt1', all_var_list)
 
     return pi
 
@@ -407,7 +411,8 @@ def flatten_lists(listoflists):
     return [el for list_ in listoflists for el in list_]
 
 def get_variables(scope):
-    return tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope)
+    tmp = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope)
+    return [s for s in tmp if not 'Adam' in s.name]
 
 def get_trainable_variables(scope):
     return tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, scope)

@@ -1,5 +1,5 @@
 import gym
-from baselines.gail.vrep_ur_env import UR5VrepEnvConcat, tipcoor
+from baselines.gail.vrep_ur_env import UR5VrepEnv, UR5VrepEnvConcat, tipcoor
 import autograd.numpy as anp
 import numpy as np
 import os
@@ -53,6 +53,20 @@ def ur5fk(thetas):
     eular = anp.array([anp.arctan2(A[2, 1], A[2, 2]), anp.arctan2(-A[2, 0], anp.sqrt(A[2, 1]**2+A[2, 2]**2)),
                       anp.arctan2(A[1, 0], A[0, 0])])
     return anp.concatenate([A[:3, 3], eular])
+
+
+def tipcoor2(thetas):
+    thetas_0 = np.array([0, pi / 2, 0, pi / 2, pi])
+    thetas = thetas + thetas_0
+    All, A0 = ur5fk(thetas)
+    ps = []
+    for i, A in enumerate(All):
+        A0 = A0 @ A
+        ps.extend(A0[:3, 3])
+        if i == 2 or i == 3:
+            p = A0[:3, 3] - 0.1 * A0[:3, 2]
+            ps.extend(p)
+    return np.array(ps)
 
 
 class UR5VrepEnvDis(UR5VrepEnvConcat):
@@ -173,13 +187,14 @@ class UR5VrepEnvKine(UR5VrepEnvConcat):
         #J = self.jacob(self._config())
         #ac = np.clip(ac, self.action_space.low, self.action_space.high)
         #ac = np.linalg.pinv(J)@ac
-        cfg = self._config()
+        '''cfg = self._config()
         norm = np.linalg.norm(self.target_joint_pos - cfg)
         if norm<self.l2_thresh*2:
             c = 0.5
         else:
             c = 1
-        ac += c*self.l2_thresh * (self.target_joint_pos - cfg) / norm
+        ac += c*self.l2_thresh * (self.target_joint_pos - cfg) / norm'''
+        ac = ac/np.linalg.norm(ac)*self.l2_thresh
         ac = np.clip(ac, self.action_space.low, self.action_space.high)
         return ac
 
@@ -241,3 +256,58 @@ class UR5VrepEnvKineLoad(UR5VrepEnvKine):
         self.prev_ac = -1
         self.t = 0
         return ob
+
+
+class ColStateEnv(UR5VrepEnvConcat):
+    def __init__(self, random_seed=0):
+        super(ColStateEnv, self).__init__(random_seed=random_seed, dof=3)
+        theta1_left = -1.4
+        theta1_right = 1.4
+        theta2_left = -1.9
+        theta2_right = 0.5
+        theta3_left = -2.7
+        theta3_right = 0.0
+        theta1_sample = np.linspace(theta1_left, theta1_right, 32)
+        theta2_sample = np.linspace(theta2_left, theta2_right, 32)
+        theta3_sample = np.linspace(theta3_left, theta3_right, 32)
+        thetas_sample = []
+        alpha = 1.2
+        for t1 in theta1_sample:
+            for t2 in theta2_sample:
+                for t3 in theta3_sample:
+                    if (alpha * t2 + t3 < -6 * pi / 5) or (alpha * t2 + t3 > 0):
+                        continue
+                    thetas_sample.append([t1, t2, t3, 0, pi / 2])
+        print(len(thetas_sample))
+        # self.collision_handle = self.get_collision_handle('Collision1')
+        self.thetas_sample = np.array(thetas_sample)
+
+    @staticmethod
+    def pldis(p1, p2, q):
+        p1q = q - p1
+        p1p2 = p2 - p1
+        return np.linalg.norm(np.cross(p1q, p1p2)) / np.linalg.norm(p1p2)
+
+    def check_col_states(self, obs):
+        emptybuff = bytearray()
+        n_states = len(self.thetas_sample)
+        col_states = np.zeros(n_states, dtype=np.int8)
+
+        for i in range(n_states):
+            theta = self.thetas_sample[i]
+            ps = tipcoor2(theta)
+            lmin = 10
+            for i in range(1, 7):
+                p = ps[i*3:i*3+3]
+                l = np.linalg.norm(p-obs)
+                lmin = l if l<lmin else lmin
+            lmin = min(lmin, self.pldis(ps[9:12], ps[15:18], obs))
+            if lmin>0.2:
+                continue
+            self.set_joints(theta)
+            #self.step_simulation()
+            colcheck = self._checkInitCollision(self.cID, emptybuff)
+            #colcheck = self._check_collision(theta, self.collision_handle)
+            col_states[i] = colcheck
+
+        return col_states

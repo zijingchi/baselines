@@ -39,7 +39,7 @@ def argsparser():
 
 
 def learn(env, policy_func, dataset, optim_batch_size=100, max_iters=1e4,
-          adam_epsilon=1e-5, optim_stepsize=1e-3,
+          adam_epsilon=1e-6, optim_stepsize=1e-3,
           ckpt_dir=None, log_dir=None, task_name=None,
           verbose=False):
 

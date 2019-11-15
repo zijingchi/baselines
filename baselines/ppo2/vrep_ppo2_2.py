@@ -3,7 +3,7 @@ from baselines import logger
 
 import datetime
 
-from baselines.gail.vrep_ur_env import UR5VrepEnvConcat
+from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
 from baselines.common.wrappers import TimeLimit
 from baselines.bench.monitor import Monitor
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
@@ -34,16 +34,16 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvConcat(server_port=19997, l2_thresh=0.08)
+        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08, random_seed=11)
         env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
                       osp.join(logger.get_dir(), "monitor.json"))
         return env
 
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
-        seed=1, network='mlp',
-        total_timesteps=2e5, ent_coef=0.01, lr=9e-5, vf_coef=0.5,  max_grad_norm=0.5, cliprange=0.2, save_interval=4,
-        log_interval=1, num_hidden=128, num_layers=3, nsteps=1024)
+        seed=1, network='mlp', gamma=0.95, lam=1.0,
+        total_timesteps=2e5, ent_coef=0.001, lr=1e-4, vf_coef=0.2,  max_grad_norm=0.5, cliprange=0.2, save_interval=4,
+        log_interval=1, num_hidden=256, num_layers=4, nsteps=2048)
     save_path = './cpt'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)

@@ -17,7 +17,9 @@ from baselines import logger
 from baselines.common import set_global_seeds, tf_util as U
 from baselines.common.misc_util import boolean_flag
 from baselines.common.mpi_adam import MpiAdam
-from baselines.gail.vrep_ur_env import UR5VrepEnv, PathPlanDset
+from keras.backend import batch_dot
+from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
+from baselines.gail.expert_demo import ExpertDataset, PathPlanDset
 
 
 def argsparser():
@@ -38,8 +40,8 @@ def argsparser():
     return parser.parse_args()
 
 
-def learn(env, policy_func, dataset, optim_batch_size=256, max_iters=5e3,
-          adam_epsilon=1e-7, optim_stepsize=1e-4,
+def learn(env, policy_func, dataset, optim_batch_size=256, max_iters=5e4,
+          adam_epsilon=1e-7, optim_stepsize=1e-3,
           ckpt_dir=None, log_dir=None, task_name=None,
           verbose=False):
 
@@ -199,7 +201,7 @@ def bc_train(expert_path, scope_name, pol, lr, cpt_path, batch_size,  max_iter, 
     U.initialize()
     if osp.exists(savedir_fname):
         U.load_variables(savedir_fname, variables=savevar)
-    dataset = PathPlanDset(expert_path=expert_path, traj_limitation=-1)
+    dataset = ExpertDataset(expert_path=expert_path, traj_limitation=-1)
     # dof += 1
     for iter_so_far in tqdm(range(int(max_iter))):
         ob_expert, ac_expert = dataset.get_next_batch(batch_size, 'train')
@@ -258,40 +260,91 @@ def get_task_name(args):
     return task_name
 
 
+def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e4,
+             adam_epsilon=1e-7, optim_stepsize=1e-3, ckpt_dir=None, verbose=False):
+    val_per_iter = int(max_iters / 10)
+    #norm_ac = tf.transpose(tf.transpose(ac)/tf.norm(ac, axis=1))
+    #norm_piac = tf.transpose(pi.action)/tf.norm(pi.action, axis=1)
+    norm_ac = tf.nn.l2_normalize(ac, axis=1)
+    norm_piac = tf.nn.l2_normalize(pi.action, axis=1)
+    loss = -tf.reduce_mean(tf.reduce_sum(tf.multiply(norm_ac, norm_piac), axis=1))
+    #loss = -tf.reduce_mean(batch_dot(norm_ac, norm_piac))
+    AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(loss,
+                                                                                                 var_list=var_list)
+    U.initialize()
+    if ckpt_dir is None:
+        savedir_fname = tempfile.TemporaryDirectory().name
+    else:
+        savedir_fname = osp.join(ckpt_dir, 'model')
+    if osp.exists(savedir_fname):
+        U.load_variables(savedir_fname, var_list)
+        #return savedir_fname
+    dataset = ExpertDataset(data_path, 0.8)
+    logger.log("Pretraining with Behavior Cloning...")
+    niter = dataset.n_val // optim_batch_size
+    sum_val_loss = 0
+    for _ in range(niter):
+        ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
+        val_loss = U.get_session().run(loss, feed_dict={ob: ob_expert, ac: ac_expert})
+        sum_val_loss += val_loss
+    logger.log("Init Validation loss: {}".format(sum_val_loss))
+    for iter_so_far in tqdm(range(int(max_iters))):
+        ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'train')
+        U.get_session().run(AdamOp, feed_dict={ob: ob_expert, ac: ac_expert})
+        if verbose and iter_so_far % val_per_iter == 0:
+            niter = dataset.n_val//optim_batch_size
+            sum_val_loss = 0
+            for _ in range(niter):
+                ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
+                val_loss = U.get_session().run(loss, feed_dict={ob: ob_expert, ac: ac_expert})
+                sum_val_loss += val_loss
+            logger.log("Validation loss: {}".format(sum_val_loss))
+    U.save_variables(savedir_fname, variables=var_list)
+    return savedir_fname
+
+
 def main(args):
+    from baselines.common.policies import build_policy
+
     U.make_session(num_cpu=1).__enter__()
     set_global_seeds(args.seed)
-    env = UR5VrepEnv(obs_space_type='dict')
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=200)
+    env = UR5VrepEnvKine(l2_thresh=0.08, random_seed=11)
+    #env = gym.wrappers.TimeLimit(env, max_episode_steps=200)
 
-    def policy_fn(name, ob_space, ac_space, reuse=False):
-        return mlp_policy.MlpPolicy4Dict(name=name, ob_space=ob_space, ac_space=ac_space,
-                                    reuse=reuse, hid_size=args.policy_hidden_size, num_hid_layers=2)
     env = bench.Monitor(env, logger.get_dir() and
                         osp.join(logger.get_dir(), "monitor.json"))
     env.seed(args.seed)
+    policy_fn = build_policy(env, 'mlp', normalize_observations=False,
+                             num_layers=4, num_hidden=256)
+
+    ob_ph = tf.placeholder(tf.float32, (None, 25), 'ob')
+    ac_ph = tf.placeholder(tf.float32, (None, 5), 'ac')
+    with tf.variable_scope("ppo2_model"):
+        pi = policy_fn(observ_placeholder=ob_ph)
+    var_list = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'ppo2_model')
+    savedir_fname = bc_learn(pi, '/home/czj/Downloads/ur5expert', ob_ph, ac_ph, var_list, max_iters=240, verbose=True,
+                             ckpt_dir='bc', optim_stepsize=1e-4)
     gym.logger.setLevel(logging.WARN)
-    task_name = get_task_name(args)
-    args.checkpoint_dir = osp.join(args.checkpoint_dir, task_name)
-    args.log_dir = osp.join(args.log_dir, task_name)
-    dataset = PathPlanDset(expert_path=args.expert_path, traj_limitation=args.traj_limitation)
-    savedir_fname = learn(env,
-                          policy_fn,
-                          dataset,
-                          max_iters=args.BC_max_iter,
-                          ckpt_dir=args.checkpoint_dir,
-                          log_dir=args.log_dir,
-                          task_name=task_name,
-                          verbose=True)
-    #savedir_fname = osp.join(args.checkpoint_dir, task_name)
-    avg_len, avg_ret = runner(env,
+
+    '''avg_len, avg_ret = runner(env,
                               policy_fn,
                               savedir_fname,
                               timesteps_per_batch=200,
                               number_trajs=100,
                               stochastic_policy=args.stochastic_policy,
                               save=args.save_sample,
-                              reuse=True)
+                              reuse=True)'''
+    suc = 0
+    for i in range(200):
+        ob = env.reset()
+        while True:
+            ac, v, _, negpa = pi.step(ob)
+            ob, rew, new, info = env.step(ac[0])
+            if new:
+                if info['status']=='reach':
+                    suc += 1
+                break
+    print('{}/{}'.format(suc, 200))
     env.close()
 
 

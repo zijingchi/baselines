@@ -242,6 +242,9 @@ def learn(env,
     obs = env.reset()
     reset = True
 
+    var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+    var_wo_adam = [s for s in var_list if 'Adam' not in s.name]
+
     with tempfile.TemporaryDirectory() as td:
         td = checkpoint_path or td
 
@@ -249,14 +252,14 @@ def learn(env,
         model_saved = False
 
         if tf.train.latest_checkpoint(td) is not None:
-            load_variables(model_file)
+            load_variables(model_file, variables=var_wo_adam)
             logger.log('Loaded model from {}'.format(model_file))
             model_saved = True
         elif load_path is not None:
-            load_variables(load_path)
+            load_variables(load_path, variables=var_wo_adam)
             logger.log('Loaded model from {}'.format(load_path))
 
-
+        suc_count = 0
         for t in range(total_timesteps):
             if callback is not None:
                 if callback(locals(), globals()):
@@ -279,7 +282,7 @@ def learn(env,
             action = act(np.array(obs)[None], update_eps=update_eps, **kwargs)[0]
             env_action = action
             reset = False
-            new_obs, rew, done, _ = env.step(env_action)
+            new_obs, rew, done, info = env.step(env_action)
             # Store transition in the replay buffer.
             replay_buffer.add(obs, action, rew, new_obs, float(done))
             obs = new_obs
@@ -289,6 +292,8 @@ def learn(env,
                 obs = env.reset()
                 episode_rewards.append(0.0)
                 reset = True
+                if info[0]['status']=='reach':
+                    suc_count += 1
 
             if t > learning_starts and t % train_freq == 0:
                 # Minimize the error in Bellman's equation on a batch sampled from replay buffer.
@@ -307,12 +312,12 @@ def learn(env,
                 # Update target network periodically.
                 update_target()
 
-            mean_100ep_reward = round(np.mean(episode_rewards[-101:-1]), 1)
+            mean_100ep_reward = round(np.mean(episode_rewards[-201:-1]), 1)
             num_episodes = len(episode_rewards)
             if done and print_freq is not None and len(episode_rewards) % print_freq == 0:
                 logger.record_tabular("steps", t)
                 logger.record_tabular("episodes", num_episodes)
-                logger.record_tabular("mean 100 episode reward", mean_100ep_reward)
+                logger.record_tabular("mean 200 episode reward", mean_100ep_reward)
                 logger.record_tabular("% time spent exploring", int(100 * exploration.value(t)))
                 logger.dump_tabular()
 
@@ -322,12 +327,12 @@ def learn(env,
                     if print_freq is not None:
                         logger.log("Saving model due to mean reward increase: {} -> {}".format(
                                    saved_mean_reward, mean_100ep_reward))
-                    save_variables(model_file)
+                    save_variables(model_file, variables=var_wo_adam)
                     model_saved = True
                     saved_mean_reward = mean_100ep_reward
         if model_saved:
             if print_freq is not None:
                 logger.log("Restored model with mean reward: {}".format(saved_mean_reward))
-            load_variables(model_file)
+            load_variables(model_file, variables=var_wo_adam)
 
     return act
