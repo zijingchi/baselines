@@ -370,6 +370,7 @@ def learn(*,
             logger.record_tabular(lossname, lossval)
 
         with timed("vf"):
+
             for _ in range(vf_iters):
                 for (mbob, mbret) in dataset.iterbatches((seg["ob"], seg["tdlamret"]),
                 include_final_partial_batch=False, batch_size=64):
@@ -403,7 +404,7 @@ def learn(*,
             logger.dump_tabular()
 
         if np.mean(rewbuffer)>bestreward:
-            U.save_variables('./best/cpt1', all_var_list)
+            U.save_variables('./best/cpt', all_var_list)
 
     return pi
 

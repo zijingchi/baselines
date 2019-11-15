@@ -23,33 +23,31 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvDis(server_port=19997, l2_thresh=0.08, num_per_dim=5, dof=3, discrete_stepsize=0.03, random_seed=3)
+        env = UR5VrepEnvDis(server_port=19997, l2_thresh=0.08, num_per_dim=5, dof=3, discrete_stepsize=0.03, random_seed=5)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)
         return env
 
     env = DummyVecEnv([env_fn])
-    model = learn(env, 'mlp', seed=1,
-                  total_timesteps=120000, buffer_size=10000,
-                  exploration_fraction=0.12,
-                  exploration_final_eps=0.02,
-                  train_freq=8,
-                  batch_size=256,
+    model = learn(env, 'mlp', seed=5, lr=1e-4,
+                  total_timesteps=200000, buffer_size=50000,
+                  exploration_fraction=0.4,
+                  exploration_final_eps=0.05,
+                  train_freq=16,
+                  batch_size=512,
                   print_freq=50,
                   checkpoint_freq=1000,
                   checkpoint_path='./best/cpt3',
                   learning_starts=1000,
-                  gamma=0.9,
+                  gamma=0.95,
                   target_network_update_freq=50,
-                  param_noise=True,
                   prioritized_replay=True,
                   prioritized_replay_alpha=0.6,
                   prioritized_replay_beta0=0.4,
-                  prioritized_replay_eps=1e-6,
-                  #load_path='./best/cpt1/model'
-                  )
-    save_path = './save'
+                  prioritized_replay_eps=1e-5,
+                  load_path='./tmpcpt5/model', hiddens=[512, 256, 256, 128])
+    save_path = './cpt'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)
         model.save(save_path)

@@ -274,11 +274,13 @@ def main(args):
         os.mkdir(str(i) + "/img2")
         os.mkdir(str(i) + "/img3")
         obs = []
+        dis = []
         acs = []
         for t in range(n_path-1):
             action = path[t+1] - path[t]
             observation, rew, done, info = env.step(action)
             obs.append(observation['joint'])
+            dis.append(env.distance)
             #ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
             #action = np.clip(action, env.action_space.low, env.action_space.high)
             acs.append(action)
@@ -288,7 +290,7 @@ def main(args):
             cv2.imwrite(img1_path, observation['image1'])
             cv2.imwrite(img2_path, observation['image2'])
             cv2.imwrite(img3_path, observation['image3'])
-        data = {'inits': init, 'observations': obs, 'actions': acs}
+        data = {'inits': init, 'observations': [obs, dis], 'actions': acs}
         with open(str(i) + '/data.pkl', 'wb') as f:
             pickle.dump(data, f)
         i = i + 1

@@ -59,15 +59,7 @@ def main():
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)
         return env
-    '''env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08)
-    suc = 0
-    for i in range(40):
-        npath, final_path = env.reset_expert()
-        if npath>0:
-            print('success')
-            suc += 1
-    print(suc/40)
-    env.close()'''
+
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
                   seed=11, network='mlp',
