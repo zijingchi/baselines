@@ -2,7 +2,8 @@ import os
 import cv2
 import re
 import pickle
-from baselines.gail.vrep_ur_env import UR5VrepEnv, tipcoor
+from baselines.gail.vrep_ur_env import UR5VrepEnvConcat, tipcoor
+import time
 import numpy as np
 pi = np.pi
 
@@ -218,11 +219,12 @@ class ExpertDataset(object):
 
 
 class Recorder(object):
-    def __init__(self, datapath, *extras, expert=False):
+    def __init__(self, datapath, *extras, begin=0):
         self.path = datapath
-        self.exp = expert
-        self.pklpath = os.path.join(datapath, 'traj.pkl')
+        if not os.path.exists(datapath):
+            os.mkdir(datapath)
         self.extras = {}
+        self.episode = begin
         for name in extras:
             self.extras[name] = []
         self.reset()
@@ -234,6 +236,15 @@ class Recorder(object):
         self.dones.append(done)
         for name, value in args:
             self.extras[name].append(value)
+        if done:
+            pklfile = os.path.join(self.path, str(self.episode)+'traj.pkl')
+            with open(pklfile, 'wb') as f:
+                data = {'ob': self.obs, 'ac': self.acs, 'rew': self.rews, 'extra': self.extras}
+                pickle.dump(data, f)
+            while os.path.getsize(pklfile)==0:
+                pickle.dump(data, f)
+            self.reset()
+            self.episode += 1
 
     def reset(self):
         self.obs = []
@@ -243,43 +254,41 @@ class Recorder(object):
         for key in self.extras.keys():
             self.extras[key] = []
 
-    def save(self):
-        with open(self.pklpath, 'wb') as f:
-            pickle.dump({'ob': self.obs, 'ac': self.acs, 'rew': self.rews,
-                         'done': self.dones, 'extra': self.extras}, f)
-        self.reset()
-
 
 def main(args):
-    workpath = 'dataset/ur5expert4/'
+    workpath = 'dataset/ur5expert5/'
     if not os.path.exists(workpath):
         os.mkdir(workpath)
-    dirlist = os.listdir(workpath)
+    '''dirlist = os.listdir(workpath)
     numlist = [int(s) for s in dirlist]
     if len(numlist) == 0:
         maxdir = -1
     else:
-        maxdir = max(numlist)
-    os.chdir(workpath)
-    env = UR5VrepEnv(dof=5, enable_cameras=True, l2_thresh=0.08, random_seed=maxdir)
+        maxdir = max(numlist)'''
+    maxdir = 0
+    #os.chdir(workpath)
+    env = UR5VrepEnvConcat(dof=5, l2_thresh=0.08, random_seed=maxdir)
+    rec = Recorder(workpath+'record', 'dis', begin=8)
     i = maxdir + 1
-    while i < maxdir + 2000:
+    while i < maxdir + 200:
         print('iter:', i)
         n_path, path = env.reset_expert()
         if n_path==0: continue
         init = {'init_joint_pos': env.init_joint_pos, 'target_joint_pos': env.target_joint_pos,
                 'obstacle_pos': env.obstacle_pos}
-        os.mkdir(str(i))
+        '''os.mkdir(str(i))
         os.mkdir(str(i) + "/img1")
         os.mkdir(str(i) + "/img2")
         os.mkdir(str(i) + "/img3")
         obs = []
         dis = []
-        acs = []
+        acs = []'''
         for t in range(n_path-1):
             action = path[t+1] - path[t]
             observation, rew, done, info = env.step(action)
-            obs.append(observation['joint'])
+            rec.record(observation, action, rew, done, ['dis', env.distance])
+            if done: break
+            '''obs.append(observation['joint'])
             dis.append(env.distance)
             #ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
             #action = np.clip(action, env.action_space.low, env.action_space.high)
@@ -292,7 +301,7 @@ def main(args):
             cv2.imwrite(img3_path, observation['image3'])
         data = {'inits': init, 'observations': [obs, dis], 'actions': acs}
         with open(str(i) + '/data.pkl', 'wb') as f:
-            pickle.dump(data, f)
+            pickle.dump(data, f)'''
         i = i + 1
     # print("Episode finished after {} timesteps.\tTotal reward: {}".format(t+1,total_reward))
     env.close()

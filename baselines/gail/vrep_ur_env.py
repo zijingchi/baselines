@@ -118,7 +118,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
         epsilon = 0.001
         obs_dis_incre = self.distance - self.last_dis
-        tip_dis_incre = self._tip_dis(state - action) - self._tip_dis(state)
+        tip_dis_incre = self._tip_dis(self.pre_config) - self._tip_dis(state)
         if tip_dis_incre > epsilon:  # tip is approaching target
             if obs_dis_incre < -epsilon:  # approaching obstacle
                 approaching = 0.01
@@ -138,7 +138,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
         else:
             approaching = 0
         # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
-        if config_dis < 1.5 * self.l2_thresh:
+        if config_dis < 0.1:
             reach = 2
         elif config_dis < 3 * self.l2_thresh:
             reach = 0.05
@@ -151,8 +151,9 @@ class UR5VrepEnv(UR5VrepEnvBase):
         return reach + collision + valid-1 + approaching + danger
 
     def _action_process(self, ac):
-        cfg = self._config()
-        return ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
+        #cfg = self._config()
+        #return ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
+        return ac
 
     def step(self, ac):
         # self._make_observation()
@@ -174,6 +175,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
             info["status"] = 'collide'
         else:
             info["status"] = 'running'
+        self.pre_config = cfg
         return self.observation, reward, done, info
 
     def reset(self):
@@ -182,7 +184,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
         while self.sim_running:
             self.stop_simulation()
 
-        if self.episode>0 and self.episode%3==0:
+        if self.episode%1==1:
             self.obj_set_position(self.obstacle, self.obstacle_pos)
             self.set_joints(self.target_joint_pos)
             self.start_simulation()
@@ -212,7 +214,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
         self.step_simulation()
         ob = self._make_observation()
         self.last_dis = self.distance
-        self.prev_ac = -1
+        self.pre_config = self._config()
         self.t = 0
         self.episode += 1
         return ob
@@ -333,6 +335,19 @@ def tipcoor(thetas):
     for A in All:
         A0 = A0 @ A
         ps.extend(A0[:3, 3])
+    return np.array(ps)
+
+def tipcoor2(thetas):
+    thetas_0 = np.array([0, pi / 2, 0, pi / 2, pi])
+    thetas = thetas + thetas_0
+    All, A0 = ur5fk(thetas)
+    ps = []
+    for i, A in enumerate(All):
+        A0 = A0 @ A
+        ps.extend(A0[:3, 3])
+        if i == 2 or i == 3:
+            p = A0[:3, 3] - 0.1 * A0[:3, 2]
+            ps.extend(p)
     return np.array(ps)
 
 
@@ -511,7 +526,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         else:
             info["status"] = 'running'
         self.last_dis = self.distance
-        self.prev_ac = ac
+        self.prev_config = cfg
         self.t += 1
         return self.observation, reward, done, info
 
@@ -519,7 +534,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         config_dis = self._angle_dis(state, self.target_joint_pos, 5)
         epsilon = 0.001
         obs_dis_incre = self.distance - self.last_dis
-        tip_dis_incre = self._tip_dis(state-action)-self._tip_dis(state)
+        tip_dis_incre = self._tip_dis(self.pre_config)-self._tip_dis(state)
         if tip_dis_incre>epsilon:  # tip is approaching target
             if obs_dis_incre<-epsilon:  # approaching obstacle
                 approaching = 0.01
@@ -539,7 +554,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         else:
             approaching = 0
         # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
-        if config_dis < 1.5 * self.l2_thresh:
+        if config_dis < 0.1:
             reach = 2
         elif config_dis<3*self.l2_thresh:
             reach = 0.05

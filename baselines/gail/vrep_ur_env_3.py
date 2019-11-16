@@ -1,9 +1,10 @@
 import gym
-from baselines.gail.vrep_ur_env import UR5VrepEnv, UR5VrepEnvConcat, tipcoor
+from baselines.gail.vrep_ur_env import tipcoor2, UR5VrepEnvConcat, tipcoor
 import autograd.numpy as anp
 import numpy as np
 import os
 import pickle
+import time
 from autograd import jacobian
 
 pi = np.pi
@@ -53,20 +54,6 @@ def ur5fk(thetas):
     eular = anp.array([anp.arctan2(A[2, 1], A[2, 2]), anp.arctan2(-A[2, 0], anp.sqrt(A[2, 1]**2+A[2, 2]**2)),
                       anp.arctan2(A[1, 0], A[0, 0])])
     return anp.concatenate([A[:3, 3], eular])
-
-
-def tipcoor2(thetas):
-    thetas_0 = np.array([0, pi / 2, 0, pi / 2, pi])
-    thetas = thetas + thetas_0
-    All, A0 = ur5fk(thetas)
-    ps = []
-    for i, A in enumerate(All):
-        A0 = A0 @ A
-        ps.extend(A0[:3, 3])
-        if i == 2 or i == 3:
-            p = A0[:3, 3] - 0.1 * A0[:3, 2]
-            ps.extend(p)
-    return np.array(ps)
 
 
 class UR5VrepEnvDis(UR5VrepEnvConcat):
@@ -128,6 +115,7 @@ class UR5VrepEnvDis(UR5VrepEnvConcat):
             info["status"] = 'collide'
         else:
             info["status"] = 'running'
+        self.prev_config = cfg
         return self.observation, reward, done, info
 
 
@@ -311,3 +299,44 @@ class ColStateEnv(UR5VrepEnvConcat):
             col_states[i] = colcheck
 
         return col_states
+
+
+def main():
+    workpath = os.path.expanduser('~/colstate')
+    datapath1 = workpath + '/0'
+    # examine_states(datapath1)
+    if not os.path.exists(workpath):
+        os.mkdir(workpath)
+    dirlist = os.listdir(workpath)
+    numlist = [int(s) for s in dirlist if os.path.isdir(os.path.join(workpath, s))]
+    if len(numlist) == 0:
+        maxdir = -1
+    else:
+        maxdir = max(numlist)
+    os.chdir(workpath)
+    next_dir = str(maxdir + 1)
+    os.mkdir(next_dir)
+
+    env = ColStateEnv(100)
+    #env.reset()
+    for i in range(600):
+        print(i)
+        start_time = time.time()
+        env.reset()
+        col_states_per_obs = env.check_col_states(env.obstacle_pos)
+        col_states_pkl = str(i) + 'col_states.pkl'
+        with open(os.path.join(next_dir, col_states_pkl), 'wb') as f2:
+            pickle.dump(col_states_per_obs, f2)
+        end_time = time.time()
+        print('cost %d s' % (end_time - start_time))
+
+    states_pkl = 'states.pkl'
+    obs_pkl = 'obs.pkl'
+    with open(os.path.join(next_dir, states_pkl), 'wb') as f1:
+        pickle.dump(env.thetas_sample, f1)
+    with open(os.path.join(next_dir, obs_pkl), 'wb') as f3:
+        pickle.dump(env.obstacle, f3)
+
+
+if __name__ == '__main__':
+    main()

@@ -140,7 +140,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
 
     def reset_expert(self):
         emptybuff = bytearray()
-        thresh = 0.1
+        thresh = 0.09
         while True:
             ob = self.reset()
             final_path = None
@@ -153,13 +153,14 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
                 n_path = n_mid
             else:
                 inFloats = self.init_joint_pos.tolist() + self.target_joint_pos.tolist()
-                n_path, path, res = self._calPathThroughVrep(self.cID, 100, inFloats, emptybuff)
+                n_path, path, res = self._calPathThroughVrep(self.cID, 30, inFloats, emptybuff)
                 if res==3:
                     time.sleep(3)
                     break
                 np_path = np.array(path)
                 re_path = np_path.reshape((n_path, self.dof))
-                c0 = self.init_joint_pos
+                final_path = re_path
+                '''c0 = self.init_joint_pos
                 final_path = [c0]
                 for c in re_path:
                     if self._angle_dis(c, c0, self.dof) > thresh:
@@ -167,7 +168,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
                         c0 = c
                 # if c0.any() != np.array(self.target_joint_pos).any():
                 #    final_path.append(np.array(self.target_joint_pos))
-                n_path = len(final_path)
+                n_path = len(final_path)'''
             if n_path:
                 break
         return n_path, final_path
