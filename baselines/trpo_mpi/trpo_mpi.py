@@ -11,7 +11,8 @@ from baselines.common.cg import cg
 from baselines.common.input import observation_placeholder
 from baselines.common.policies import build_policy
 from contextlib import contextmanager
-from baselines.gail.bc_vrep import bc_learn
+from baselines.gail.bc_vrep import bc_learn, vf_bc, vf_mc_bc
+from baselines.gail.expert_demo import Recorder
 
 try:
     from mpi4py import MPI
@@ -30,6 +31,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     cur_ep_len = 0
     ep_rets = []
     ep_lens = []
+    recorder = Recorder('record', begin=3474)
 
     # Initialize history arrays
     obs = np.array([ob for _ in range(horizon)])
@@ -47,6 +49,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         # before returning segment [0, T-1] so we get the correct
         # terminal value
         if t > 0 and t % horizon == 0:
+            logger.log('success rate:{}/{}'.format(suc, episode))
             yield {"ob" : obs, "rew" : rews, "vpred" : vpreds, "new" : news,
                     "ac" : acs, "prevac" : prevacs, "nextvpred": vpred * (1 - new),
                     "ep_rets" : ep_rets, "ep_lens" : ep_lens}
@@ -54,7 +57,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
             # Be careful!!! if you change the downstream algorithm to aggregate
             # several of these batches, then be sure to do a deepcopy
             ep_rets = []
-            logger.log('success rate:{}/{}'.format(suc, episode))
+
             episode = 0
             suc = 0
             ep_lens = []
@@ -66,6 +69,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         prevacs[i] = prevac
 
         ob, rew, new, _ = env.step(ac)
+        recorder.record(ob, ac, rew, new)
         rews[i] = rew
 
         cur_ep_ret += rew
@@ -212,12 +216,13 @@ def learn(*,
     dist = meankl
 
     all_var_list = get_trainable_variables("pi")
-    if data_path:
-        var_list = [v for v in all_var_list if v.name.split("/")[1]=='pi']
-        savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=1000, verbose=True, ckpt_dir='best')
     # vf_var_list = [v for v in all_var_list if v.name.split("/")[1].startswith("vf")]
     var_list = get_pi_trainable_variables("pi")
     vf_var_list = get_vf_trainable_variables("pi")
+    if data_path:
+        #var_list = [v for v in all_var_list if v.name.split("/")[1]=='pi']
+        pi_savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=2000, verbose=True, ckpt_dir='best', optim_stepsize=1e-3)
+        vf_savedir_fname = vf_mc_bc(pi, ob, ret, './record', vferr, vf_var_list, 1024, 2000, ckpt_dir='vf', verbose=True, optim_stepsize=2e-5)
 
     vfadam = MpiAdam(vf_var_list)
 

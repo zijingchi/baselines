@@ -85,7 +85,7 @@ def learn(*, network, env, total_timesteps, eval_env=None, seed=None, nsteps=204
     else: assert callable(cliprange)
     total_timesteps = int(total_timesteps)
 
-    policy = build_policy(env, network, **network_kwargs)
+    policy = build_policy(env, network, value_network='copy', **network_kwargs)
 
     # Get the nb of env
     nenvs = env.num_envs

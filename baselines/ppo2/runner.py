@@ -1,5 +1,6 @@
 import numpy as np
 from baselines.common.runners import AbstractEnvRunner
+from baselines.gail.expert_demo import Recorder
 VREP = True
 
 if VREP:
@@ -24,6 +25,7 @@ class Runner(AbstractEnvRunner):
         # Discount rate
         self.gamma = gamma
         self.count = 0
+        self.recorder = Recorder('./record', 'vf', begin=1403)
 
     def run(self):
         # Here, we init the lists that will contain the mb of experiences
@@ -46,6 +48,7 @@ class Runner(AbstractEnvRunner):
             # Take actions in env and look the results
             # Infos contains a ton of useful informations
             self.obs[:], rewards, self.dones, infos = self.env.step(actions)
+            self.recorder.record(self.obs[0], actions[0], rewards[0], self.dones[0], ['vf', values[0]])
 
             for info in infos:
                 maybeepinfo = info.get('episode')

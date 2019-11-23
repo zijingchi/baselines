@@ -7,6 +7,7 @@ from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
 from baselines.common.wrappers import TimeLimit
 from baselines.bench.monitor import Monitor
 from baselines.common.vec_env.dummy_vec_env import DummyVecEnv
+import tensorflow as tf
 try:
     from mpi4py import MPI
 except ImportError:
@@ -41,9 +42,9 @@ def main():
 
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
-        seed=1, network='mlp', gamma=0.95, lam=1.0,
+        seed=1, network='mlp', gamma=0.95, lam=0.9,
         total_timesteps=2e5, ent_coef=0.001, lr=1e-4, vf_coef=0.2,  max_grad_norm=0.5, cliprange=0.2, save_interval=4,
-        log_interval=1, num_hidden=256, num_layers=4, nsteps=2048)
+        log_interval=1, num_hidden=128, num_layers=4, activation=tf.nn.leaky_relu, nsteps=2048)
     save_path = './cpt'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)

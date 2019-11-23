@@ -48,9 +48,9 @@ class Model(object):
             if VREP:
                 #bc_train('../gail/dataset/ur5expert3', 'ppo2_model', train_model, 1e-3, './ckpt/concat128', nbatch_train, 1000, 5, 0.08, 50)
                 bc_learn(train_model, '/home/czj/Downloads/ur5expert', train_model.X, train_model.pdtype.sample_placeholder([None]),
-                         [v for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'ppo2_model')],   #if v.name.find('/vf')==-1
-                         max_iters=1200, optim_batch_size=nbatch_train, verbose=True,
-                         #ckpt_dir='/home/czj/Downloads/ur5expert'
+                         [v for v in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, 'ppo2_model') if v.name.find('/vf')==-1],
+                         max_iters=1000, optim_batch_size=nbatch_train, verbose=True,
+                         ckpt_dir='bc', optim_stepsize=2e-4
                          )
                 if env:
                     bc_val(env, act_model, 100)

@@ -17,9 +17,9 @@ from baselines import logger
 from baselines.common import set_global_seeds, tf_util as U
 from baselines.common.misc_util import boolean_flag
 from baselines.common.mpi_adam import MpiAdam
-from keras.backend import batch_dot
+from keras.utils import to_categorical
 from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
-from baselines.gail.expert_demo import ExpertDataset, PathPlanDset
+from baselines.gail.expert_demo import ExpertDataset, RecordLoader
 
 
 def argsparser():
@@ -145,6 +145,30 @@ def runner(env, policy_func, load_model_path, timesteps_per_batch, number_trajs,
     print("Average return:", avg_ret)
     return avg_len, avg_ret
 
+
+def add_vtarg_and_adv(seg, gamma, lam):
+    new = np.append(seg["new"], 0) # last element is only used for last vtarg, but we already zeroed it if last new = 1
+    vpred = np.append(seg["vpred"], seg["nextvpred"])
+    T = len(seg["rew"])
+    seg["adv"] = gaelam = np.empty(T, 'float32')
+    rew = seg["rew"]
+    lastgaelam = 0
+    for t in reversed(range(T)):
+        nonterminal = 1-new[t+1]
+        delta = rew[t] + gamma * vpred[t+1] * nonterminal - vpred[t]
+        gaelam[t] = lastgaelam = delta + gamma * lam * nonterminal * lastgaelam
+    seg["tdlamret"] = seg["adv"] + seg["vpred"]
+
+
+def add_vtarg(seg, gamma):
+    T = len(seg['rew'])
+    gts = np.empty(T, 'float32')
+    lastg = 0
+    new = seg['new']
+    rew = seg['rew']
+    for t in reversed(range(T)):
+        gts[t] = lastg = rew[t] + gamma*(1-new[t])*lastg
+    seg['vpred'] = gts
 
 def traj_1_generator(pi, env, horizon, stochastic):
 
@@ -275,7 +299,7 @@ def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e
     if ckpt_dir is None:
         savedir_fname = tempfile.TemporaryDirectory().name
     else:
-        savedir_fname = osp.join(ckpt_dir, 'model')
+        savedir_fname = osp.join(ckpt_dir, 'model4x128')
     if osp.exists(savedir_fname):
         U.load_variables(savedir_fname, var_list)
         #return savedir_fname
@@ -287,7 +311,7 @@ def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e
         ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
         val_loss = U.get_session().run(loss, feed_dict={ob: ob_expert, ac: ac_expert})
         sum_val_loss += val_loss
-    logger.log("Init Validation loss: {}".format(sum_val_loss))
+    logger.log("Init Validation loss: {}".format(sum_val_loss/niter))
     for iter_so_far in tqdm(range(int(max_iters))):
         ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'train')
         U.get_session().run(AdamOp, feed_dict={ob: ob_expert, ac: ac_expert})
@@ -298,10 +322,109 @@ def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e
                 ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
                 val_loss = U.get_session().run(loss, feed_dict={ob: ob_expert, ac: ac_expert})
                 sum_val_loss += val_loss
-            logger.log("Validation loss: {}".format(sum_val_loss))
+            logger.log("Validation loss: {}".format(sum_val_loss/niter))
     U.save_variables(savedir_fname, variables=var_list)
     return savedir_fname
 
+
+def vf_bc(pi, ob, ret, data_path, vferr, var_list, batch_size=256, max_iters=200, lam=0.95, gamma=0.95,
+          adam_epsilon=1e-7, optim_stepsize=1e-4, ckpt_dir=None, verbose=False):
+    AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(vferr,
+                                                                                                 var_list=var_list)
+    loader = RecordLoader(data_path)
+    U.initialize()
+    if ckpt_dir is None:
+        savedir_fname = tempfile.TemporaryDirectory().name
+    else:
+        savedir_fname = osp.join(ckpt_dir, 'vf_bc')
+    #if osp.exists(savedir_fname):
+        #U.load_variables(savedir_fname, var_list)
+        #return savedir_fname
+    for i in range(int(max_iters)):
+        record_data = loader.get_next_batch(batch_size)
+        record_data['vpred'] = U.get_session().run(pi.vf, {ob: record_data['ob']}).flatten()
+        record_data['nextvpred'] = U.get_session().run(pi.vf, {ob: record_data['nextob']})
+        add_vtarg_and_adv(record_data, gamma, lam)
+        U.get_session().run(AdamOp, {ob: record_data['ob'], ret: record_data['tdlamret']})
+        if verbose and i%50==0:
+            err = U.get_session().run(vferr, {ob: record_data['ob'], ret: record_data['tdlamret']})
+            logger.log('iter: {}, tderr: {}'.format(i, err))
+    U.save_variables(savedir_fname, variables=var_list)
+    return savedir_fname
+
+
+def vf_mc_bc(pi, ob, ret, data_path, vferr, var_list, batch_size=256, max_iters=200, lam=0.95, gamma=0.95,
+          adam_epsilon=1e-7, optim_stepsize=1e-4, ckpt_dir=None, verbose=False):
+    AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(vferr,
+                                                                                                 var_list=var_list)
+    loader = RecordLoader(data_path)
+    U.initialize()
+    if ckpt_dir is None:
+        savedir_fname = tempfile.TemporaryDirectory().name
+    else:
+        savedir_fname = osp.join(ckpt_dir, 'vf_bc')
+    if osp.exists(savedir_fname):
+        U.load_variables(savedir_fname, var_list)
+        #return savedir_fname
+    for i in range(int(max_iters)):
+        record_data = loader.get_next_batch(batch_size)
+        record_data['vpred'] = U.get_session().run(pi.vf, {ob: record_data['ob']}).flatten()
+        add_vtarg(record_data, gamma)
+        U.get_session().run(AdamOp, {ob: record_data['ob'], ret: record_data['vpred']})
+        if verbose and i%50==0:
+            err = U.get_session().run(vferr, {ob: record_data['ob'], ret: record_data['vpred']})
+            logger.log('iter: {}, tderr: {}'.format(i, err))
+    U.save_variables(savedir_fname, variables=var_list)
+    return savedir_fname
+
+
+def bc_dis(act, data_path, ob, var_list, optim_batch_size=256, max_iters=5e4,
+             adam_epsilon=1e-7, optim_stepsize=1e-3, ckpt_dir=None, verbose=False):
+    val_per_iter = int(max_iters / 10)
+    ac_true = tf.placeholder(dtype=tf.float32, shape=(None, 125), name='label')
+    ac_pred = tf.placeholder(dtype=tf.float32, shape=(None, 125), name='pi_ac')
+    loss = tf.reduce_sum(tf.nn.softmax_cross_entropy_with_logits(ac_pred, ac_true))
+    AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(loss,
+                                                                                                 var_list=var_list)
+
+    def categorical_accuracy(y_true, y_pred):
+        return tf.cast(tf.equal(tf.argmax(y_true, axis=-1),
+                                tf.argmax(y_pred, axis=-1)),
+                       'float32')
+    acc = categorical_accuracy(ac_true, ac_pred)
+    U.initialize()
+    if ckpt_dir is None:
+        savedir_fname = tempfile.TemporaryDirectory().name
+    else:
+        savedir_fname = osp.join(ckpt_dir, 'model')
+    if osp.exists(savedir_fname):
+        U.load_variables(savedir_fname, var_list)
+        # return savedir_fname
+    dataset = ExpertDataset(data_path, 0.8)
+    logger.log("Pretraining with Behavior Cloning...")
+    niter = dataset.n_val // optim_batch_size
+    sum_val_loss = 0
+    for _ in range(niter):
+        ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
+        val_loss = U.get_session().run(loss, feed_dict={ob: ob_expert, ac_true: to_categorical(ac_expert),
+                                                        ac_pred: act(ob_expert)})
+        sum_val_loss += val_loss
+    logger.log("Init Validation loss: {}".format(sum_val_loss / niter))
+    for iter_so_far in tqdm(range(int(max_iters))):
+        ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'train')
+        U.get_session().run(AdamOp, feed_dict={ob: ob_expert, ac_true: to_categorical(ac_expert),
+                                               ac_pred: act(ob_expert)})
+        if verbose and iter_so_far % val_per_iter == 0:
+            niter = dataset.n_val // optim_batch_size
+            sum_val_loss = 0
+            for _ in range(niter):
+                ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
+                val_loss, val_acc = U.get_session().run([loss, acc], feed_dict={ob: ob_expert, ac_true: to_categorical(ac_expert),
+                                                                ac_pred: act(ob_expert)})
+                sum_val_loss += val_loss
+            logger.log("Validation loss: {}".format(sum_val_loss / niter))
+    U.save_variables(savedir_fname, variables=var_list)
+    return savedir_fname
 
 def main(args):
     from baselines.common.policies import build_policy

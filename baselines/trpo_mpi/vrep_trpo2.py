@@ -54,7 +54,7 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08, random_seed=11)
+        env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08, random_seed=15)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=120)
@@ -62,9 +62,10 @@ def main():
 
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
-                  seed=11, network='mlp',
-                  total_timesteps=2e5, ent_coef=0.001, max_kl=0.001, cg_iters=10, cg_damping=0.05, vf_stepsize=5e-5,
-                  num_hidden=256, num_layers=3, timesteps_per_batch=2048, load_path=None, data_path='/home/czj/Downloads/ur5expert')
+                  seed=15, network='mlp', gamma=0.95, lam=0.95,
+                  total_timesteps=2e5, ent_coef=0.001, max_kl=0.002, cg_iters=15, cg_damping=0.01, vf_stepsize=1e-4,
+                  num_hidden=128, num_layers=4, activation=tf.nn.leaky_relu, timesteps_per_batch=1600, load_path=None,
+                  data_path='/home/czj/Downloads/ur5expert')
     save_path = './cpt0'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)

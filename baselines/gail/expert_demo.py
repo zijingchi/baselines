@@ -218,6 +218,144 @@ class ExpertDataset(object):
             return self.read_indexes(cur_list[cur_pointer:]+cur_list[:end-cur_len])
 
 
+class ExpertDisDataset(ExpertDataset):
+    def __init__(self, expert_path, dof=3, interval=0.08, train_fraction=0.7, listpkl='list0.pkl', traj_limitation=-1):
+        super(ExpertDisDataset, self).__init__(expert_path, train_fraction=train_fraction, listpkl=listpkl,
+                                               traj_limitation=traj_limitation)
+        self.dof = dof
+        self.interval = interval
+        self.data = {'obs':[], 'acs':[]}
+
+    @staticmethod
+    def fiv(numa):
+        acnum = 0
+        for i, a in enumerate(reversed(numa)):
+            acnum += (5**i)*a
+        return acnum
+
+    @staticmethod
+    def defiv(acnum, dof):
+        res = [0 for _ in range(dof)]
+        for i in range(dof)[::-1]:
+            res[i] = acnum % 5
+            acnum = acnum // 5
+        return res
+
+    def ac_process(self, acs):
+        final_acs = []
+        acs /= self.interval
+        acs = np.round(acs)+2.0
+        for ac in acs:
+            final_acs.append(self.fiv(ac))
+        return final_acs
+
+    def split_train(self, fraction):
+        if os.path.exists(os.path.join(self.path, self.listpkl)):
+            with open(os.path.join(self.path, self.listpkl), 'rb') as f:
+                data = pickle.load(f)
+                self.data = data['data']
+                self.train_list = data['train']
+                self.vali_list = data['test']
+        else:
+            dirlist = os.listdir(self.path)
+            np.random.shuffle(dirlist)
+            for d in dirlist:
+                subdir = os.path.join(self.path, d)
+                if os.path.isdir(subdir):
+                    datapkl = os.path.join(subdir, 'data.pkl')
+                    if os.path.exists(datapkl):
+                        with open(datapkl, 'rb') as dataf:
+                            pkl_data = pickle.load(dataf)
+                            inits = pkl_data['inits']
+                            obs = pkl_data['observations']
+                            tar_pos = inits['target_joint_pos']
+                            obstacle_pos = inits['obstacle_pos']
+                            for t in range(len(obs)):
+                                config = obs[t]
+                                xyzs = tipcoor(config)[3:-3]
+                                self.data['obs'].append(np.concatenate((config, tar_pos, obstacle_pos, xyzs)))
+                            self.data['acs'].extend(self.ac_process(pkl_data['actions']))
+            self.data['obs'] = np.array(self.data['obs'])
+            self.data['acs'] = np.array(self.data['acs'])
+            id_list = np.arange(len(self.data['acs']))
+            train_size = int(fraction*len(id_list))
+            self.train_list = id_list[:train_size]
+            self.vali_list = id_list[train_size:]
+            np.random.shuffle(self.train_list)
+            np.random.shuffle(self.vali_list)
+            with open(os.path.join(self.path, self.listpkl), 'wb') as f:
+                pickle.dump({'data':self.data, 'train': self.train_list, 'test': self.vali_list}, f)
+
+    def get_next_batch(self, batch_size, split='train'):
+        if split == 'train':
+            cur_list = self.train_list
+            cur_pointer = self.train_pointer
+            cur_len = self.n_train
+        elif split == 'val':
+            cur_list = self.vali_list
+            cur_pointer = self.val_pointer
+            cur_len = self.n_val
+        else:
+            raise NotImplementedError
+        end = cur_pointer + batch_size
+        if batch_size<0:
+            return self.data['obs'][cur_list], self.data['acs'][cur_list]
+        if end<cur_len:
+            if split=='train':
+                self.train_pointer = end
+            else:
+                self.val_pointer = end
+            return self.data['obs'][cur_list[cur_pointer:end]], self.data['acs'][cur_list[cur_pointer:end]]
+        else:
+            if split=='train':
+                self.train_pointer = end - cur_len
+            else:
+                self.val_pointer = end - cur_len
+            return np.concatenate((self.data['obs'][cur_list[cur_pointer:]], self.data['obs'][cur_list[:end-cur_len]]), 0), \
+                   np.concatenate(
+                       (self.data['acs'][cur_list[cur_pointer:]], self.data['acs'][cur_list[:end - cur_len]]), 0)
+
+
+class RecordLoader(object):
+    def __init__(self, datapath):
+        self.path = datapath
+        self.samples = {'ob': [], 'ac': [], 'rew': [], 'new': []}
+        self.load()
+        self.total = len(self.samples['ob'])
+        self.pointer = 0
+
+    def load(self):
+        dirlist = os.listdir(self.path)
+        for d in dirlist:
+            with open(os.path.join(self.path, d), 'rb') as f:
+                data = pickle.load(f)
+                ob = [o[0] for o in data['ob']]
+                ac = [a[0] for a in data['ac']]
+                rew = [r[0] for r in data['rew']]
+            self.samples['ob'].extend(ob)
+            self.samples['ac'].extend(ac)
+            self.samples['rew'].extend(rew)
+            self.samples['new'].extend([0 for _ in range(len(rew)-1)] + [1])
+
+    def get_next_batch(self, batch_size):
+        end = self.pointer + batch_size
+        pointer = self.pointer
+        if end>self.total:
+            self.pointer = end - self.total
+            data = {'ob': np.array(self.samples['ob'][pointer:]+self.samples['ob'][:self.pointer]),
+                    'ac': np.array(self.samples['ac'][pointer:]+self.samples['ac'][:self.pointer]),
+                    'rew': np.array(self.samples['rew'][pointer:]+self.samples['rew'][:self.pointer]),
+                    'new': np.array(self.samples['new'][pointer:] + self.samples['new'][:self.pointer]),
+                    'nextob': np.expand_dims(self.samples['ob'][self.pointer], 0)}
+        else:
+            self.pointer = end
+            data = {'ob': np.array(self.samples['ob'][pointer:end]),
+                    'ac': np.array(self.samples['ac'][pointer:end]),
+                    'rew': np.array(self.samples['rew'][pointer:end]),
+                    'new': np.array(self.samples['new'][pointer:end]),
+                    'nextob': np.expand_dims(self.samples['ob'][end%(self.total-1)], 0)}
+        return data
+
 class Recorder(object):
     def __init__(self, datapath, *extras, begin=0):
         self.path = datapath
@@ -234,8 +372,8 @@ class Recorder(object):
         self.acs.append(ac)
         self.rews.append(rew)
         self.dones.append(done)
-        for name, value in args:
-            self.extras[name].append(value)
+        for extra in args:
+            self.extras[extra[0]].append(extra[1])
         if done:
             pklfile = os.path.join(self.path, str(self.episode)+'traj.pkl')
             with open(pklfile, 'wb') as f:
