@@ -31,7 +31,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     cur_ep_len = 0
     ep_rets = []
     ep_lens = []
-    recorder = Recorder('record', begin=3474)
+    recorder = Recorder('record_avo1', 'vf', 'eps', begin=0)
 
     # Initialize history arrays
     obs = np.array([ob for _ in range(horizon)])
@@ -69,7 +69,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         prevacs[i] = prevac
 
         ob, rew, new, _ = env.step(ac)
-        recorder.record(ob, ac, rew, new)
+        recorder.record(ob, ac, rew, new, ['vf', vpred[0]], ['eps', t > 0 and t % horizon == 0])
         rews[i] = rew
 
         cur_ep_ret += rew
@@ -177,8 +177,7 @@ def learn(*,
             intra_op_parallelism_threads=cpus_per_worker
     ))
 
-
-    policy = build_policy(env, network, value_network='copy', **network_kwargs)
+    policy = build_policy(env, network, value_network='copy', normalize_observations=False, **network_kwargs)
     set_global_seeds(seed)
 
     np.set_printoptions(precision=3)
@@ -221,8 +220,8 @@ def learn(*,
     vf_var_list = get_vf_trainable_variables("pi")
     if data_path:
         #var_list = [v for v in all_var_list if v.name.split("/")[1]=='pi']
-        pi_savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=2000, verbose=True, ckpt_dir='best', optim_stepsize=1e-3)
-        vf_savedir_fname = vf_mc_bc(pi, ob, ret, './record', vferr, vf_var_list, 1024, 2000, ckpt_dir='vf', verbose=True, optim_stepsize=2e-5)
+        pi_savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=2000, verbose=True, ckpt_dir='avo_bc', optim_stepsize=1e-4)
+        #vf_savedir_fname = vf_mc_bc(pi, ob, ret, './record', vferr, vf_var_list, 1024, 1000, ckpt_dir='vf', verbose=True, optim_stepsize=1e-4)
 
     vfadam = MpiAdam(vf_var_list)
 
@@ -272,7 +271,7 @@ def learn(*,
     U.initialize()
     if load_path is not None:
         #pi.load(load_path)
-        U.load_variables(load_path, all_var_list)
+        U.load_variables(load_path, [v for v in all_var_list if 'vf' not in v.name])
 
     th_init = get_flat()
     if MPI is not None:
@@ -409,7 +408,7 @@ def learn(*,
             logger.dump_tabular()
 
         if np.mean(rewbuffer)>bestreward:
-            U.save_variables('./best/cpt', all_var_list)
+            U.save_variables('./best/avo_cpt2', all_var_list)
 
     return pi
 

@@ -176,7 +176,7 @@ class ExpertDataset(object):
             action = actions[t]
             if np.linalg.norm(action) > 0.5:
                 action = actions[-1]
-
+        action = action - 0.1*(tar_pos-config)/np.linalg.norm(tar_pos-config)
         observation['config'] = obs_final
         return observation, action
 
@@ -317,8 +317,9 @@ class ExpertDisDataset(ExpertDataset):
 
 
 class RecordLoader(object):
-    def __init__(self, datapath):
+    def __init__(self, datapath, sort=False):
         self.path = datapath
+        self.sort = sort
         self.samples = {'ob': [], 'ac': [], 'rew': [], 'new': []}
         self.load()
         self.total = len(self.samples['ob'])
@@ -326,12 +327,14 @@ class RecordLoader(object):
 
     def load(self):
         dirlist = os.listdir(self.path)
+        if self.sort:
+            dirlist.sort()
         for d in dirlist:
             with open(os.path.join(self.path, d), 'rb') as f:
                 data = pickle.load(f)
-                ob = [o[0] for o in data['ob']]
-                ac = [a[0] for a in data['ac']]
-                rew = [r[0] for r in data['rew']]
+                ob = data['ob']
+                ac = data['ac']
+                rew = data['rew']
             self.samples['ob'].extend(ob)
             self.samples['ac'].extend(ac)
             self.samples['rew'].extend(rew)
@@ -381,6 +384,7 @@ class Recorder(object):
                 pickle.dump(data, f)
             while os.path.getsize(pklfile)==0:
                 pickle.dump(data, f)
+            print('save {}'.format(self.episode))
             self.reset()
             self.episode += 1
 
@@ -391,6 +395,16 @@ class Recorder(object):
         self.dones = []
         for key in self.extras.keys():
             self.extras[key] = []
+
+def analyze_var(path):
+    loader = RecordLoader(path, True)
+    trajs = []
+    ex = 0
+    for i in range(loader.total):
+        if loader.samples['new'][i]:
+            trajs.append([np.array(loader.samples['ob'])[ex:i+1, 0:5], np.array(loader.samples['ac'][ex:i+1])])
+            ex = i+1
+    print(len(trajs))
 
 
 def main(args):
@@ -405,13 +419,15 @@ def main(args):
         maxdir = max(numlist)'''
     maxdir = 0
     #os.chdir(workpath)
-    env = UR5VrepEnvConcat(dof=5, l2_thresh=0.08, random_seed=maxdir)
-    rec = Recorder(workpath+'record', 'dis', begin=8)
+    env = UR5VrepEnvConcat(dof=5, l2_thresh=0.1, random_seed=maxdir)
+    rec = Recorder(workpath+'record_var3', 'dis', begin=0)
     i = maxdir + 1
-    while i < maxdir + 200:
+    while i < maxdir + 101:
         print('iter:', i)
         n_path, path = env.reset_expert()
-        if n_path==0: continue
+        if n_path==0:
+            print(i, 'not found')
+            continue
         init = {'init_joint_pos': env.init_joint_pos, 'target_joint_pos': env.target_joint_pos,
                 'obstacle_pos': env.obstacle_pos}
         '''os.mkdir(str(i))
@@ -421,11 +437,16 @@ def main(args):
         obs = []
         dis = []
         acs = []'''
+        observation = env.observation
         for t in range(n_path-1):
             action = path[t+1] - path[t]
-            observation, rew, done, info = env.step(action)
+            next_observation, rew, done, info = env.step(action)
             rec.record(observation, action, rew, done, ['dis', env.distance])
-            if done: break
+            observation = next_observation
+            if done:
+                print(i, 'done')
+                break
+
             '''obs.append(observation['joint'])
             dis.append(env.distance)
             #ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
@@ -437,9 +458,11 @@ def main(args):
             cv2.imwrite(img1_path, observation['image1'])
             cv2.imwrite(img2_path, observation['image2'])
             cv2.imwrite(img3_path, observation['image3'])
+        
         data = {'inits': init, 'observations': [obs, dis], 'actions': acs}
         with open(str(i) + '/data.pkl', 'wb') as f:
             pickle.dump(data, f)'''
+        print(observation[5:10])
         i = i + 1
     # print("Episode finished after {} timesteps.\tTotal reward: {}".format(t+1,total_reward))
     env.close()
@@ -448,5 +471,5 @@ def main(args):
 
 if __name__ == '__main__':
     import sys
-
-    sys.exit(main(sys.argv))
+    analyze_var('dataset/ur5expert5/record_var2')
+    #sys.exit(main(sys.argv))

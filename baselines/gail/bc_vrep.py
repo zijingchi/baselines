@@ -289,10 +289,11 @@ def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e
     val_per_iter = int(max_iters / 10)
     #norm_ac = tf.transpose(tf.transpose(ac)/tf.norm(ac, axis=1))
     #norm_piac = tf.transpose(pi.action)/tf.norm(pi.action, axis=1)
-    norm_ac = tf.nn.l2_normalize(ac, axis=1)
-    norm_piac = tf.nn.l2_normalize(pi.action, axis=1)
-    loss = -tf.reduce_mean(tf.reduce_sum(tf.multiply(norm_ac, norm_piac), axis=1))
-    #loss = -tf.reduce_mean(batch_dot(norm_ac, norm_piac))
+    #norm_ac = tf.nn.l2_normalize(ac, axis=1)
+    #norm_piac = tf.nn.l2_normalize(pi.action, axis=1)
+    #loss = -tf.reduce_mean(tf.reduce_sum(tf.multiply(norm_ac, norm_piac), axis=1))
+    metrics = tf.constant([1.2, 1.2, 1.2, 0.4, 0.4])
+    loss = tf.reduce_mean(tf.reduce_sum(tf.square(tf.multiply(metrics, ac-pi.action)), axis=1))
     AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(loss,
                                                                                                  var_list=var_list)
     U.initialize()
@@ -365,7 +366,7 @@ def vf_mc_bc(pi, ob, ret, data_path, vferr, var_list, batch_size=256, max_iters=
         savedir_fname = osp.join(ckpt_dir, 'vf_bc')
     if osp.exists(savedir_fname):
         U.load_variables(savedir_fname, var_list)
-        #return savedir_fname
+        return savedir_fname
     for i in range(int(max_iters)):
         record_data = loader.get_next_batch(batch_size)
         record_data['vpred'] = U.get_session().run(pi.vf, {ob: record_data['ob']}).flatten()

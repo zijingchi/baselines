@@ -151,9 +151,9 @@ class UR5VrepEnv(UR5VrepEnvBase):
         return reach + collision + valid-1 + approaching + danger
 
     def _action_process(self, ac):
-        #cfg = self._config()
-        #return ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
-        return ac
+        cfg = self._config()
+        return ac + self.l2_thresh * (self.target_joint_pos - cfg) / np.linalg.norm(self.target_joint_pos - cfg)
+        #return ac
 
     def step(self, ac):
         # self._make_observation()
@@ -184,20 +184,16 @@ class UR5VrepEnv(UR5VrepEnvBase):
         while self.sim_running:
             self.stop_simulation()
 
-        if self.episode%1==1:
-            self.obj_set_position(self.obstacle, self.obstacle_pos)
-            self.set_joints(self.target_joint_pos)
-            self.start_simulation()
-        else:
+        if self.episode%10==0:
             init_w = [0.1, 0.1, 0.1, 0.2, 0.2]
-            init_joint_pos = np.array([0, -pi / 6+0.1, -3 * pi / 4, 0, pi / 2])
+            init_joint_pos = np.array([0, -pi / 6 + 0.1, -3 * pi / 4, 0, pi / 2])
             target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
-            init_joint_pos = init_joint_pos + np.multiply(init_w, 0.5*np.random.randn(5))
-            target_joint_pos = target_joint_pos + np.multiply(init_w, 0.8*np.random.randn(5))
+            init_joint_pos = init_joint_pos + np.multiply(init_w, 0.5 * np.random.randn(5))
+            target_joint_pos = target_joint_pos + np.multiply(init_w, 0.8 * np.random.randn(5))
             self.start_simulation()
-            while abs(init_joint_pos[2])>5*pi/6 or abs(target_joint_pos[2])>5*pi/6:
-                init_joint_pos[2] = self.init_joint_pos[2] + init_w[2]*np.random.randn()
-                target_joint_pos[2] = self.target_joint_pos[2] + init_w[2]*np.random.randn()
+            while abs(init_joint_pos[2]) > 5 * pi / 6 or abs(target_joint_pos[2]) > 5 * pi / 6:
+                init_joint_pos[2] = init_joint_pos[2] + init_w[2] * np.random.randn()
+                target_joint_pos[2] = target_joint_pos[2] + init_w[2] * np.random.randn()
             self.set_joints(target_joint_pos)
             self.init_joint_pos = init_joint_pos
             self.target_joint_pos = target_joint_pos
@@ -208,6 +204,13 @@ class UR5VrepEnv(UR5VrepEnvBase):
 
             while self._clear_obs_col():
                 self.reset_obstacle()
+        else:
+            self.start_simulation()
+            self.obj_set_position(self.obstacle, self.obstacle_pos)
+            self.set_joints(self.target_joint_pos)
+            self.tip_pos = self.obj_get_position(self.tip)
+            self.tip_ori = self.obj_get_orientation(self.tip)
+
         self.obj_set_position(self.goal_viz, self.tip_pos)
         self.obj_set_orientation(self.goal_viz, self.tip_ori)
         self.set_joints(self.init_joint_pos)
@@ -482,7 +485,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         #obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
         #obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        obs_pos += np.concatenate((0.12 * np.random.randn(2), np.array([0.25 * np.random.rand() + 0.04])))
+        obs_pos += np.concatenate((0.05 * np.random.randn(2), np.array([0.25 * np.random.rand() + 0.04])))
         obs_pos[0] += 0.04*np.random.rand()
         self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[5*2:5*2+3],
                                     self.observation_space.high[5*2:5*2+3])
@@ -506,16 +509,17 @@ class UR5VrepEnvConcat(UR5VrepEnv):
 
     def step(self, ac):
         # self._make_observation()
-        ac = self._action_process(ac)
-        #ac = np.clip(ac, self.action_space.low, self.action_space.high)
+        #ac = self._action_process(ac)
+        ac = np.clip(ac, self.action_space.low, self.action_space.high)
         invalid = not self._make_action(ac)
         self.step_simulation()
         self._make_observation()
-        self.collision_check = self.read_collision(self.collision_handle) or abs(self.observation[2])>5*pi/6
+        cfg = self._config()
+        self.collision_check = self.read_collision(self.collision_handle) or \
+                               abs(cfg[2])>5*pi/6 or cfg[1]+cfg[2]>-pi/6
 
-        cfg = self.observation[:self.dof]
         done = self._angle_dis(cfg, self.target_joint_pos,
-                               5) < 0.1 or self.collision_check or invalid
+                               5) < 0.12 or self.collision_check or invalid
 
         reward = self.compute_reward(cfg, ac)
         info = {}
@@ -554,7 +558,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         else:
             approaching = 0
         # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
-        if config_dis < 0.1:
+        if config_dis < 0.12:
             reach = 2
         elif config_dis<3*self.l2_thresh:
             reach = 0.05
@@ -568,7 +572,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         return 2*(reach + collision + invalid + approaching + danger)
 
 
-class UR5VrepEnvDrtn(UR5VrepEnv):
+class UR5VrepEnvDrtn(UR5VrepEnvConcat):
     def __init__(self,
                  server_addr='127.0.0.1',
                  server_port=19997,
@@ -576,8 +580,7 @@ class UR5VrepEnvDrtn(UR5VrepEnv):
                  l2_thresh=0.1,
                  random_seed=0,
                  dof=5,):
-        super(UR5VrepEnvDrtn, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_seed,
-                                             dof, False)
+        super(UR5VrepEnvDrtn, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_seed, dof)
         self.action_space = spaces.Box(low=-2*pi*np.ones(dof-1), high=2*pi*np.ones(dof-1))
         self._make_obs_space()
 
@@ -597,10 +600,9 @@ class UR5VrepEnvDrtn(UR5VrepEnv):
         return np.array([a1, a2, a3, a4])
 
     def _dir2vec(self, d, l2):
-        t = [np.cos(d[0]), np.sin(d[0])]
-        for i in range(1, self.dof):
-            last = t[-1]
-            t[-1] = last * np.sin(d[i])
-            t.append(last * np.cos(d[i]))
-        t = np.array(t[:])  # 偏移后的方向对应的单位角向量
-        return l2*t
+        a1 = np.cos(d[0])
+        a2 = np.sin(d[0])*np.sin(d[1])
+        a3 = np.sin(d[0])*np.cos(d[1])*np.sin(d[2])
+        a4 = a3/np.tan(d[2])*np.sin(d[3])
+        a5 = a4/np.tan(d[3])
+        return np.array([a1, a2, a3, a4, a5])*l2
