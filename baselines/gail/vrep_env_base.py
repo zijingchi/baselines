@@ -61,7 +61,7 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
         """send the signal to v-rep and retrieve the path tuple calculated by the v-rep script"""
         dof = self.dof
         maxTrialsForConfigSearch = 300  # a parameter needed for finding appropriate goal states
-        searchCount = 3  # how many times OMPL will run for a given task
+        searchCount = 2  # how many times OMPL will run for a given task
         # minConfigsForPathPlanningPath = 50  # interpolation states for the OMPL path
         minConfigsForIkPath = 100  # interpolation states for the linear approach path
         collisionChecking = 1  # whether collision checking is on or off
@@ -140,9 +140,14 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
 
     def reset_expert(self):
         emptybuff = bytearray()
-        thresh = 0.09
+        thresh = 0.1
         while True:
             ob = self.reset()
+            try:
+                ob[0]
+            except:
+                print('fail at reset')
+                continue
             final_path = None
             n_mid = int(self._angle_dis(self.target_joint_pos, self.init_joint_pos, self.dof) / thresh)
             linear_res = self.directly_towards(n_mid)
@@ -153,8 +158,9 @@ class UR5VrepEnvBase(vrep_env.VrepEnv):
                 n_path = n_mid
             else:
                 inFloats = self.init_joint_pos.tolist() + self.target_joint_pos.tolist()
-                n_path, path, res = self._calPathThroughVrep(self.cID, 100, inFloats, emptybuff)
+                n_path, path, res = self._calPathThroughVrep(self.cID, 300, inFloats, emptybuff)
                 if n_path==0:
+                    print('fail at rrt*')
                     continue
                 if res==3:
                     time.sleep(3)

@@ -2,7 +2,7 @@ import os.path as osp
 from baselines import logger
 
 import datetime
-
+import tensorflow as tf
 from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
 from baselines.common.wrappers import TimeLimit
 from baselines.bench.monitor import Monitor
@@ -36,7 +36,7 @@ def main():
 
     def env_fn():
         env = UR5VrepEnvKine(server_port=19997, l2_thresh=0.08, random_seed=11)
-        env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
+        env = Monitor(TimeLimit(env, max_episode_steps=40), logger.get_dir() and
                       osp.join(logger.get_dir(), "monitor.json"))
         return env
 

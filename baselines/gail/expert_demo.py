@@ -3,6 +3,7 @@ import cv2
 import re
 import pickle
 from baselines.gail.vrep_ur_env import UR5VrepEnvConcat, tipcoor
+from baselines.gail.vrep_ur_env_3 import TableEnv
 import time
 import numpy as np
 pi = np.pi
@@ -100,6 +101,7 @@ class ExpertDataset(object):
         self.load_img = load_img
         self.listpkl = listpkl
         self.traj_limit = traj_limitation
+        self.data = {'obs': np.empty((0, 25), 'float32'), 'acs': np.empty((0, 5), 'float32')}
         self.split_train(train_fraction)
         self.n_train = len(self.train_list)
         self.n_val = len(self.vali_list)
@@ -110,12 +112,11 @@ class ExpertDataset(object):
         if os.path.exists(os.path.join(self.path, self.listpkl)):
             with open(os.path.join(self.path, self.listpkl), 'rb') as f:
                 data = pickle.load(f)
+                self.data = data['data']
                 self.train_list = data['train']
                 self.vali_list = data['test']
         else:
-            #self.listpkl = 'list0.pkl'
             dirlist = os.listdir(self.path)
-            id_list = []
             np.random.shuffle(dirlist)
             for d in dirlist:
                 subdir = os.path.join(self.path, d)
@@ -123,27 +124,34 @@ class ExpertDataset(object):
                     datapkl = os.path.join(subdir, 'data.pkl')
                     if os.path.exists(datapkl):
                         with open(datapkl, 'rb') as dataf:
-                            data = pickle.load(dataf)
-                            '''a0 = data['actions'][0]
-                            at = data['actions'][-1]
-                            if np.linalg.norm(a0-at)<0.02 and np.random.rand()<0.8:
-                                #shutil.rmtree(subdir)
-                                continue'''
-                            for i in range(len(data['actions'])):
-                                id_list.append(d + '-' + str(i))
-            if self.traj_limit>0:
-                id_list = id_list[:self.traj_limit]
-            id_size = len(id_list)
-            train_size = int(fraction * id_size)
-            # np.random.shuffle(id_list)
+                            pkl_data = pickle.load(dataf)
+                            inits = pkl_data['inits']
+                            obs = pkl_data['observations']
+                            tar_pos = inits['target_joint_pos']
+                            obstacle_pos = inits['obstacle_pos']
+                            process = np.empty((len(obs), 25))
+                            actions = np.array(pkl_data['actions'])
+                            pro_actions = []
+                            for t in range(len(obs)):
+                                config = obs[t][:5]
+                                xyzs = tipcoor(config)[3:-3]
+                                process[t] = np.concatenate((config, tar_pos, obstacle_pos, xyzs))
+                                pro_actions.append(0.1*actions[t]/np.linalg.norm(actions[t]) -
+                                                   0.1*(tar_pos-config)/np.linalg.norm(tar_pos-config))
+                            self.data['obs'] = np.concatenate((self.data['obs'], process), 0)
+                            self.data['acs'] = np.concatenate((self.data['acs'], self.ac_process(pro_actions)), 0)
+
+            id_list = np.arange(len(self.data['acs']))
+            train_size = int(fraction * len(id_list))
             self.train_list = id_list[:train_size]
             self.vali_list = id_list[train_size:]
-
             np.random.shuffle(self.train_list)
             np.random.shuffle(self.vali_list)
+            with open(os.path.join(self.path, self.listpkl), 'wb') as f:
+                pickle.dump({'data': self.data, 'train': self.train_list, 'test': self.vali_list}, f)
 
-            with open(os.path.join(self.path, self.listpkl), 'wb') as f1:
-                pickle.dump({'train': self.train_list, 'test': self.vali_list}, f1)
+    def ac_process(self, acs):
+        return np.array(acs)
 
     def read_single_index(self, index):
         reindex = re.split('\W', index)
@@ -174,9 +182,9 @@ class ExpertDataset(object):
 
             actions = pkl_data['actions']
             action = actions[t]
-            if np.linalg.norm(action) > 0.5:
-                action = actions[-1]
-        action = action - 0.1*(tar_pos-config)/np.linalg.norm(tar_pos-config)
+            #if np.linalg.norm(action) > 0.5:
+            #    action = actions[-1]
+        action = 0.1*(action/np.linalg.norm(action) - (tar_pos-config)/np.linalg.norm(tar_pos-config))
         observation['config'] = obs_final
         return observation, action
 
@@ -200,22 +208,23 @@ class ExpertDataset(object):
             cur_len = self.n_val
         else:
             raise NotImplementedError
-        #cur_len = len(cur_list)
         end = cur_pointer + batch_size
         if batch_size<0:
-            return self.read_indexes(cur_list)
+            return self.data['obs'][cur_list], self.data['acs'][cur_list]
         if end<cur_len:
             if split=='train':
                 self.train_pointer = end
             else:
                 self.val_pointer = end
-            return self.read_indexes(cur_list[cur_pointer:end])
+            return self.data['obs'][cur_list[cur_pointer:end]], self.data['acs'][cur_list[cur_pointer:end]]
         else:
             if split=='train':
                 self.train_pointer = end - cur_len
             else:
                 self.val_pointer = end - cur_len
-            return self.read_indexes(cur_list[cur_pointer:]+cur_list[:end-cur_len])
+            return np.concatenate((self.data['obs'][cur_list[cur_pointer:]], self.data['obs'][cur_list[:end-cur_len]]), 0), \
+                   np.concatenate(
+                       (self.data['acs'][cur_list[cur_pointer:]], self.data['acs'][cur_list[:end - cur_len]]), 0)
 
 
 class ExpertDisDataset(ExpertDataset):
@@ -271,7 +280,7 @@ class ExpertDisDataset(ExpertDataset):
                             tar_pos = inits['target_joint_pos']
                             obstacle_pos = inits['obstacle_pos']
                             for t in range(len(obs)):
-                                config = obs[t]
+                                config = obs[t][:5]
                                 xyzs = tipcoor(config)[3:-3]
                                 self.data['obs'].append(np.concatenate((config, tar_pos, obstacle_pos, xyzs)))
                             self.data['acs'].extend(self.ac_process(pkl_data['actions']))
@@ -397,72 +406,91 @@ class Recorder(object):
             self.extras[key] = []
 
 def analyze_var(path):
-    loader = RecordLoader(path, True)
+    '''loader = RecordLoader(path, True)
     trajs = []
     ex = 0
     for i in range(loader.total):
         if loader.samples['new'][i]:
             trajs.append([np.array(loader.samples['ob'])[ex:i+1, 0:5], np.array(loader.samples['ac'][ex:i+1])])
             ex = i+1
-    print(len(trajs))
+    print(len(trajs))'''
+    dirlist = os.listdir(path)
+    dirlist.sort(key=lambda s:int(s))
+    trajs = []
+    for d in dirlist:
+        with open(os.path.join(path, d, 'data.pkl'), 'rb') as f:
+            data = pickle.load(f)
+            init_pos = data['observations'][0][:5]
+            action0 = data['actions'][0]
+            trajs.append([init_pos, action0])
+    nper = 30
+    nconf = len(trajs)//nper
+    alss = []
+
+    for k in range(nconf):
+        als = np.array([trajs[i][1] for i in range(nper*k, nper*(k+1))])
+        alss.append(als)
+        print('ai var', np.std(als, 0))
+    #als = np.array([trajs[i] for i in range(nper*nconf, len(trajs))])
+    #print('ai var', np.std(als, 0))
+    #alss.append(als)
+    return alss
 
 
 def main(args):
-    workpath = 'dataset/ur5expert5/'
+    workpath = 'dataset/tablescene/'
     if not os.path.exists(workpath):
         os.mkdir(workpath)
-    '''dirlist = os.listdir(workpath)
+    dirlist = os.listdir(workpath)
     numlist = [int(s) for s in dirlist]
     if len(numlist) == 0:
         maxdir = -1
     else:
-        maxdir = max(numlist)'''
-    maxdir = 0
-    #os.chdir(workpath)
-    env = UR5VrepEnvConcat(dof=5, l2_thresh=0.1, random_seed=maxdir)
-    rec = Recorder(workpath+'record_var3', 'dis', begin=0)
+        maxdir = max(numlist)
+    #maxdir = 0
+    os.chdir(workpath)
+    env = TableEnv(dof=5, l2_thresh=0.1, random_seed=max(0, maxdir), enable_cameras=False)
+    #rec = Recorder(workpath+'record_var3', 'dis', begin=0)
     i = maxdir + 1
-    while i < maxdir + 101:
+    while i < maxdir + 2021:
         print('iter:', i)
         n_path, path = env.reset_expert()
         if n_path==0:
             print(i, 'not found')
             continue
         init = {'init_joint_pos': env.init_joint_pos, 'target_joint_pos': env.target_joint_pos,
-                'obstacle_pos': env.obstacle_pos}
-        '''os.mkdir(str(i))
-        os.mkdir(str(i) + "/img1")
+                'obstacle_pos': env.obstacle_pos, 'obstacle_ori': env.obstacle_ori}
+        os.mkdir(str(i))
+        '''os.mkdir(str(i) + "/img1")
         os.mkdir(str(i) + "/img2")
-        os.mkdir(str(i) + "/img3")
+        os.mkdir(str(i) + "/img3")'''
         obs = []
         dis = []
-        acs = []'''
+        rews = []
+        acs = []
         observation = env.observation
         for t in range(n_path-1):
             action = path[t+1] - path[t]
             next_observation, rew, done, info = env.step(action)
-            rec.record(observation, action, rew, done, ['dis', env.distance])
-            observation = next_observation
-            if done:
-                print(i, 'done')
-                break
-
-            '''obs.append(observation['joint'])
+            #rec.record(observation, action, rew, done, ['dis', env.distance])
+            obs.append(observation)
             dis.append(env.distance)
-            #ac_expert[i] - thresh * (tar[i] - cur[i]) / np.linalg.norm(tar[i] - cur[i])
-            #action = np.clip(action, env.action_space.low, env.action_space.high)
             acs.append(action)
-            img1_path = str(i) + "/img1/" + str(t) + ".jpg"
+            rews.append(rew)
+            '''img1_path = str(i) + "/img1/" + str(t) + ".jpg"
             img2_path = str(i) + "/img2/" + str(t) + ".jpg"
             img3_path = str(i) + "/img3/" + str(t) + ".jpg"
-            cv2.imwrite(img1_path, observation['image1'])
-            cv2.imwrite(img2_path, observation['image2'])
-            cv2.imwrite(img3_path, observation['image3'])
-        
-        data = {'inits': init, 'observations': [obs, dis], 'actions': acs}
+            cv2.imwrite(img1_path, env.img1)
+            cv2.imwrite(img2_path, env.img2)
+            cv2.imwrite(img3_path, env.img3)'''
+            observation = next_observation
+            if done:
+                print(rew)
+                break
+        data = {'inits': init, 'observations': obs, 'dis': dis, 'actions': acs, 'rew': rews}
         with open(str(i) + '/data.pkl', 'wb') as f:
-            pickle.dump(data, f)'''
-        print(observation[5:10])
+            pickle.dump(data, f)
+
         i = i + 1
     # print("Episode finished after {} timesteps.\tTotal reward: {}".format(t+1,total_reward))
     env.close()
@@ -471,5 +499,26 @@ def main(args):
 
 if __name__ == '__main__':
     import sys
-    analyze_var('dataset/ur5expert5/record_var2')
-    #sys.exit(main(sys.argv))
+    '''alss = analyze_var('dataset/vartest')
+    import matplotlib.pyplot as plt
+    x = np.linspace(1, 5, 5)
+    y = alss[0][:25].mean(axis=0)
+    dy = alss[0][:25].std(axis=0)
+    plt.errorbar(x, y, yerr=dy, fmt='o', ecolor='r', color='b')
+    plt.show()'''
+    sys.exit(main(sys.argv))
+    '''loader = ExpertDataset('dataset/cubedata0', 0.8)
+    n = loader.n_train
+    _, acs = loader.get_next_batch(60000, 'train')
+    import matplotlib.pyplot as plt
+    a1s = acs[:, 0]
+    a2s = acs[:, 1]
+    a3s = acs[:, 2]
+    bins = np.arange(-0.2, 0.2, 0.01)
+    plt.hist(a1s, bins, color='blue', alpha=0.4)
+    plt.hist(a2s, bins, color='red', alpha=0.4)
+    plt.hist(a3s, bins, color='fuchsia', alpha=0.4)
+    plt.xlabel('a1')
+    plt.ylabel('count')
+    plt.show()
+    '''

@@ -184,7 +184,7 @@ class UR5VrepEnv(UR5VrepEnvBase):
         while self.sim_running:
             self.stop_simulation()
 
-        if self.episode%10==0:
+        if self.episode%1==0:
             init_w = [0.1, 0.1, 0.1, 0.2, 0.2]
             init_joint_pos = np.array([0, -pi / 6 + 0.1, -3 * pi / 4, 0, pi / 2])
             target_joint_pos = np.array([0, - pi / 3, - pi / 3, 0, pi / 2])
@@ -284,10 +284,10 @@ def ur5fk(thetas):
     d1 = 8.92e-2
     d2 = 0.11
     d5 = 9.475e-2
-    d6 = 1.1495e-1
+    d6 = 2.0968e-1
     a2 = 4.251e-1
     a3 = 3.9215e-1
-    d0 = 0.3
+    d0 = 0.28535
     All = np.zeros((6, 4, 4))
     All[:, 3, 3] = 1
     for i in range(5):
@@ -438,15 +438,17 @@ class UR5VrepEnvConcat(UR5VrepEnv):
             l2_thresh=0.1,
             random_seed=0,
             dof=5,
+            enable_cameras=False
     ):
 
         super(UR5VrepEnvConcat, self).__init__(
             server_addr,
             server_port,
             scene_path,
-            l2_thresh,
-            random_seed,
-            dof,
+            l2_thresh=l2_thresh,
+            random_seed=random_seed,
+            dof=dof,
+            enable_cameras=enable_cameras
         )
         self._make_obs_space()
 
@@ -475,7 +477,13 @@ class UR5VrepEnvConcat(UR5VrepEnv):
                                            ps[3:-3],
                                            #np.array([self.distance])
                                            ])
-
+        if self.enable_cameras:
+            img1 = self.obj_get_vision_image(self.camera1)
+            img2 = self.obj_get_vision_image(self.camera2)
+            img3 = self.obj_get_vision_image(self.camera3)
+            self.img1 = np.flip(img1, 2)
+            self.img2 = np.flip(img2, 2)
+            self.img3 = np.flip(img3, 2)
         return self.observation
 
     def reset_obstacle(self):
@@ -483,7 +491,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         goal_tip = tipcoor(self.target_joint_pos)[-3:]
         alpha = 0.4 + 0.2*np.random.randn()
         #obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
-        #obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand() + 0.24])))
+        #obs_pos += np.concatenate((0.15 * np.random.randn(2), np.array([0.15 * np.random.rand()  0.24])))
         obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
         obs_pos += np.concatenate((0.05 * np.random.randn(2), np.array([0.25 * np.random.rand() + 0.04])))
         obs_pos[0] += 0.04*np.random.rand()
@@ -509,7 +517,7 @@ class UR5VrepEnvConcat(UR5VrepEnv):
 
     def step(self, ac):
         # self._make_observation()
-        #ac = self._action_process(ac)
+        ac = self._action_process(ac)
         ac = np.clip(ac, self.action_space.low, self.action_space.high)
         invalid = not self._make_action(ac)
         self.step_simulation()
@@ -523,14 +531,14 @@ class UR5VrepEnvConcat(UR5VrepEnv):
 
         reward = self.compute_reward(cfg, ac)
         info = {}
-        if self._angle_dis(cfg, self.target_joint_pos, self.dof) < 0.1:
+        if self._angle_dis(cfg, self.target_joint_pos, self.dof) < 0.12:
             info["status"] = 'reach'
         elif done:
             info["status"] = 'collide'
         else:
             info["status"] = 'running'
         self.last_dis = self.distance
-        self.prev_config = cfg
+        self.pre_config = cfg
         self.t += 1
         return self.observation, reward, done, info
 
@@ -571,6 +579,77 @@ class UR5VrepEnvConcat(UR5VrepEnv):
         invalid = -1 if not valid else 0
         return 2*(reach + collision + invalid + approaching + danger)
 
+
+class UR5VrepEnvConcatCub(UR5VrepEnvConcat):
+    def __init__(self, server_port=19997, l2_thresh=0.1, random_seed=0, dof=5, enable_cameras=False):
+        super(UR5VrepEnvConcatCub, self).__init__(server_addr='127.0.0.1', server_port=server_port, scene_path=None,
+                                                  l2_thresh=l2_thresh, random_seed=random_seed, dof=dof, enable_cameras=enable_cameras)
+        self._make_obs_space()
+
+    def _make_obs_space(self):
+        joint_lbound = np.array([-2 * pi / 3, -pi / 2, -pi, -pi / 2, 0])
+        joint_hbound = np.array([2 * pi / 3, pi / 6, 0, pi / 2, pi])
+        obstacle_pos_lbound = np.array([-5, -5, 0]*3)
+        obstalce_pos_hbound = np.array([5, 5, 2]*3)
+
+        pos_lbound = np.array([-1.2, -1.2, -0.2] * 4)
+        pos_hbound = np.array([1.2, 1.2, 1.3] * 4)
+        self.observation_space = gym.spaces.Box(
+            low=np.concatenate([joint_lbound, joint_lbound, obstacle_pos_lbound, pos_lbound]),
+            high=np.concatenate([joint_hbound, joint_hbound, obstalce_pos_hbound, pos_hbound]))
+
+    @staticmethod
+    def eul2rotm(eular):
+        p, h, b = eular
+        Rx = np.array([[1, 0, 0],
+                       [0, np.cos(p), -np.sin(p)],
+                       [0, np.sin(p), np.cos(p)]])
+        Ry = np.array([[np.cos(h), 0, np.sin(h)],
+                       [0, 1, 0],
+                       [-np.sin(h), 0, np.cos(h)]])
+        Rz = np.array([[np.cos(b), -np.sin(b), 0],
+                       [np.sin(b), np.cos(b), 0],
+                       [0, 0, 1]])
+        return Rx@Ry@Rz
+
+    def cal_obs_ps(self, offset):
+        mat = self.eul2rotm(self.obstacle_ori)
+        z = mat[:, 1]
+        poff = offset*z
+        return np.concatenate((self.obstacle_pos-poff, self.obstacle_pos, self.obstacle_pos+poff))
+
+    def _make_observation(self):
+        """Get observation from v-rep and stores in self.observation
+        """
+        joint_angles = [self.obj_get_joint_angle(joint) for joint in self.oh_joint]
+        self.distance = self.read_distance(self.distance_handle)
+        self.tip_pos = self.obj_get_position(self.tip)
+        ps = tipcoor(joint_angles)
+        self.observation = np.concatenate([np.array(joint_angles).astype('float32'),
+                                           self.target_joint_pos,
+                                           self.cal_obs_ps(0.2),
+                                           ps[3:-3],
+                                           ])
+        if self.enable_cameras:
+            img1 = self.obj_get_vision_image(self.camera1)
+            img2 = self.obj_get_vision_image(self.camera2)
+            img3 = self.obj_get_vision_image(self.camera3)
+            self.img1 = np.flip(img1, 2)
+            self.img2 = np.flip(img2, 2)
+            self.img3 = np.flip(img3, 2)
+        return self.observation
+
+    def reset_obstacle(self):
+        init_tip = tipcoor(self.init_joint_pos)[-3:]
+        goal_tip = tipcoor(self.target_joint_pos)[-3:]
+        alpha = 0.4 + 0.2*np.random.randn()
+
+        obs_pos = alpha * init_tip + (1 - alpha) * goal_tip
+        obs_pos += np.concatenate((0.08 * np.random.randn(2), np.array([0.25 * np.random.rand() + 0.15])))
+        obs_pos[0] += 0.04*np.random.rand()
+        self.obstacle_ori = 0.4*np.random.randn(3)+np.array([pi/2, 0, 0])
+        self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[5*2:5*2+3],
+                                    self.observation_space.high[5*2:5*2+3])
 
 class UR5VrepEnvDrtn(UR5VrepEnvConcat):
     def __init__(self,

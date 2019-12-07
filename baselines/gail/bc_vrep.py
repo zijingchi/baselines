@@ -17,7 +17,7 @@ from baselines import logger
 from baselines.common import set_global_seeds, tf_util as U
 from baselines.common.misc_util import boolean_flag
 from baselines.common.mpi_adam import MpiAdam
-from keras.utils import to_categorical
+#from keras.backend import batch_dot
 from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
 from baselines.gail.expert_demo import ExpertDataset, RecordLoader
 
@@ -286,25 +286,27 @@ def get_task_name(args):
 
 def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e4,
              adam_epsilon=1e-7, optim_stepsize=1e-3, ckpt_dir=None, verbose=False):
-    val_per_iter = int(max_iters / 10)
+    val_per_iter = min(100, int(max_iters / 10))
     #norm_ac = tf.transpose(tf.transpose(ac)/tf.norm(ac, axis=1))
     #norm_piac = tf.transpose(pi.action)/tf.norm(pi.action, axis=1)
     #norm_ac = tf.nn.l2_normalize(ac, axis=1)
     #norm_piac = tf.nn.l2_normalize(pi.action, axis=1)
     #loss = -tf.reduce_mean(tf.reduce_sum(tf.multiply(norm_ac, norm_piac), axis=1))
-    metrics = tf.constant([1.2, 1.2, 1.2, 0.4, 0.4])
+    metrics = tf.constant([1.2, 1.2, 1.2, 0.8, 0.8])
     loss = tf.reduce_mean(tf.reduce_sum(tf.square(tf.multiply(metrics, ac-pi.action)), axis=1))
+    loss_summary = tf.summary.scalar('loss', loss)
     AdamOp = tf.train.AdamOptimizer(learning_rate=optim_stepsize, epsilon=adam_epsilon).minimize(loss,
                                                                                                  var_list=var_list)
     U.initialize()
     if ckpt_dir is None:
         savedir_fname = tempfile.TemporaryDirectory().name
     else:
-        savedir_fname = osp.join(ckpt_dir, 'model4x128')
+        savedir_fname = osp.join(ckpt_dir, 'model4x128_obs3')
     if osp.exists(savedir_fname):
         U.load_variables(savedir_fname, var_list)
         #return savedir_fname
     dataset = ExpertDataset(data_path, 0.8)
+    writer = tf.summary.FileWriter("logs/avo", U.get_session().graph)
     logger.log("Pretraining with Behavior Cloning...")
     niter = dataset.n_val // optim_batch_size
     sum_val_loss = 0
@@ -321,9 +323,12 @@ def bc_learn(pi, data_path, ob, ac, var_list, optim_batch_size=256, max_iters=5e
             sum_val_loss = 0
             for _ in range(niter):
                 ob_expert, ac_expert = dataset.get_next_batch(optim_batch_size, 'val')
-                val_loss = U.get_session().run(loss, feed_dict={ob: ob_expert, ac: ac_expert})
+                summary, val_loss = U.get_session().run([loss_summary, loss], feed_dict={ob: ob_expert, ac: ac_expert})
+                writer.add_summary(summary, iter_so_far)
                 sum_val_loss += val_loss
             logger.log("Validation loss: {}".format(sum_val_loss/niter))
+    logstd = [v for v in var_list if 'logstd' in v.name][0]
+    U.get_session().run(logstd.assign(-3*np.ones((1, 5), 'float32')))
     U.save_variables(savedir_fname, variables=var_list)
     return savedir_fname
 
@@ -378,7 +383,7 @@ def vf_mc_bc(pi, ob, ret, data_path, vferr, var_list, batch_size=256, max_iters=
     U.save_variables(savedir_fname, variables=var_list)
     return savedir_fname
 
-
+'''
 def bc_dis(act, data_path, ob, var_list, optim_batch_size=256, max_iters=5e4,
              adam_epsilon=1e-7, optim_stepsize=1e-3, ckpt_dir=None, verbose=False):
     val_per_iter = int(max_iters / 10)
@@ -426,6 +431,7 @@ def bc_dis(act, data_path, ob, var_list, optim_batch_size=256, max_iters=5e4,
             logger.log("Validation loss: {}".format(sum_val_loss / niter))
     U.save_variables(savedir_fname, variables=var_list)
     return savedir_fname
+    '''
 
 def main(args):
     from baselines.common.policies import build_policy

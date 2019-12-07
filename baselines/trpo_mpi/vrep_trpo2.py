@@ -7,7 +7,7 @@ from collections import deque
 import datetime
 import gym
 import baselines.common.tf_util as U
-from baselines.gail.vrep_ur_env import UR5VrepEnvConcat, UR5VrepEnvDrtn
+from baselines.gail.vrep_ur_env import UR5VrepEnvConcatCub, UR5VrepEnvDrtn
 from baselines.gail.vrep_ur_env_3 import UR5VrepEnvKine
 from baselines.common.distributions import make_pdtype
 from baselines.acktr.utils import dense
@@ -54,7 +54,7 @@ def main():
     #              osp.join(logger.get_dir(), "monitor.json"))
 
     def env_fn():
-        env = UR5VrepEnvConcat(server_port=19997, l2_thresh=0.1, random_seed=16)
+        env = UR5VrepEnvConcatCub(server_port=19997, l2_thresh=0.1, random_seed=1)
         #env = Monitor(TimeLimit(env, max_episode_steps=120), logger.get_dir() and
         #              osp.join(logger.get_dir(), "monitor.json"))
         env = TimeLimit(env, max_episode_steps=50)
@@ -62,10 +62,10 @@ def main():
 
     env = DummyVecEnv([env_fn])
     model = learn(env=env,
-                  seed=16, network='mlp', gamma=0.95, lam=0.95,
-                  total_timesteps=1e5, ent_coef=0.002, max_kl=0.002, cg_iters=25, cg_damping=0.01, vf_stepsize=1e-4,
-                  num_hidden=128, num_layers=4, activation=tf.tanh, vf_iters=8, timesteps_per_batch=1600,
-                  load_path='./best/cpt_avo1', data_path=None)
+                  seed=1, network='mlp', gamma=0.95, lam=0.95,
+                  total_timesteps=1e5, ent_coef=0.05, max_kl=0.01, cg_iters=15, cg_damping=0.01, vf_stepsize=1e-4,
+                  num_hidden=128, num_layers=4, activation=tf.nn.tanh, vf_iters=5, timesteps_per_batch=1600,
+                  load_path=None, data_path=None)
     save_path = './cpt0'
     if save_path is not None and rank == 0:
         save_path = osp.expanduser(save_path)

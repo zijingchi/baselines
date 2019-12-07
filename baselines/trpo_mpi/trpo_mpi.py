@@ -13,11 +13,14 @@ from baselines.common.policies import build_policy
 from contextlib import contextmanager
 from baselines.gail.bc_vrep import bc_learn, vf_bc, vf_mc_bc
 from baselines.gail.expert_demo import Recorder
+from baselines.common.rew_saver import RewSaver
 
 try:
     from mpi4py import MPI
 except ImportError:
     MPI = None
+
+rewsaver = RewSaver('avo_wtbc_log', 300)
 
 def traj_segment_generator(pi, env, horizon, stochastic):
     # Initialize state variables
@@ -31,7 +34,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
     cur_ep_len = 0
     ep_rets = []
     ep_lens = []
-    recorder = Recorder('record_avo1', 'vf', 'eps', begin=0)
+    #recorder = Recorder('record_avo1', 'vf', 'eps', begin=0)
 
     # Initialize history arrays
     obs = np.array([ob for _ in range(horizon)])
@@ -68,8 +71,8 @@ def traj_segment_generator(pi, env, horizon, stochastic):
         acs[i] = ac
         prevacs[i] = prevac
 
-        ob, rew, new, _ = env.step(ac)
-        recorder.record(ob, ac, rew, new, ['vf', vpred[0]], ['eps', t > 0 and t % horizon == 0])
+        ob, rew, new, info = env.step(ac)
+        #recorder.record(ob, ac, rew, new, ['vf', vpred[0]], ['eps', t > 0 and t % horizon == 0])
         rews[i] = rew
 
         cur_ep_ret += rew
@@ -78,7 +81,7 @@ def traj_segment_generator(pi, env, horizon, stochastic):
             ep_rets.append(cur_ep_ret)
             ep_lens.append(cur_ep_len)
             episode += 1
-            if rew > 0.5:
+            if info[0]['status']=='reach':
                 suc += 1
             cur_ep_ret = 0
             cur_ep_len = 0
@@ -94,7 +97,7 @@ def add_vtarg_and_adv(seg, gamma, lam):
     lastgaelam = 0
     for t in reversed(range(T)):
         nonterminal = 1-new[t+1]
-        delta = rew[t] + gamma * vpred[t+1] * nonterminal - vpred[t]
+        delta = rew[t] + gamma * vpred[t+1] * nonterminal - vpred[t]  # TD(lam)
         gaelam[t] = lastgaelam = delta + gamma * lam * nonterminal * lastgaelam
     seg["tdlamret"] = seg["adv"] + seg["vpred"]
 
@@ -220,7 +223,11 @@ def learn(*,
     vf_var_list = get_vf_trainable_variables("pi")
     if data_path:
         #var_list = [v for v in all_var_list if v.name.split("/")[1]=='pi']
-        pi_savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=2000, verbose=True, ckpt_dir='avo_bc', optim_stepsize=1e-4)
+        global_step = tf.Variable(0, trainable=False)
+        lr = tf.train.exponential_decay(learning_rate=0.0005, global_step=global_step, decay_steps=80,
+                                        decay_rate=0.98, staircase=False)
+        pi_savedir_fname = bc_learn(pi, data_path, ob, ac, var_list, max_iters=5000, verbose=True, ckpt_dir='avo_bc',
+                                    optim_stepsize=lr, optim_batch_size=512)
         #vf_savedir_fname = vf_mc_bc(pi, ob, ret, './record', vferr, vf_var_list, 1024, 1000, ckpt_dir='vf', verbose=True, optim_stepsize=1e-4)
 
     vfadam = MpiAdam(vf_var_list)
@@ -408,7 +415,7 @@ def learn(*,
             logger.dump_tabular()
 
         if np.mean(rewbuffer)>bestreward:
-            U.save_variables('./best/avo_cpt2', all_var_list)
+            U.save_variables('./best/avo_wtbc_cpt1', all_var_list)
 
     return pi
 

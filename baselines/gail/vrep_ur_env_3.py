@@ -105,7 +105,7 @@ class UR5VrepEnvDis(UR5VrepEnvConcat):
 
         cfg = self._config()
         done = self._angle_dis(cfg, self.target_joint_pos,
-                               5) < 1.5 * self.l2_thresh or self.collision_check or invalid
+                               5) < 0.12 or self.collision_check or invalid
 
         reward = self.compute_reward(cfg, ac)
         info = {}
@@ -115,7 +115,7 @@ class UR5VrepEnvDis(UR5VrepEnvConcat):
             info["status"] = 'collide'
         else:
             info["status"] = 'running'
-        self.prev_config = cfg
+        self.pre_config = cfg
         return self.observation, reward, done, info
 
 
@@ -299,6 +299,197 @@ class ColStateEnv(UR5VrepEnvConcat):
             col_states[i] = colcheck
 
         return col_states
+
+
+class TableEnv(UR5VrepEnvConcat):
+    def __init__(self,
+                 server_addr='127.0.0.1',
+                 server_port=19997,
+                 scene_path=None,
+                 l2_thresh=0.1,
+                 random_seed=0,
+                 dof=5,
+                 enable_cameras=False,
+                 ):
+        super(TableEnv, self).__init__(server_addr, server_port, scene_path, l2_thresh, random_seed, dof, enable_cameras)
+        jps = ['jp' + str(i) for i in range(2, 8)]
+        self.jps = list(map(self.get_object_handle, jps))
+        self._make_obs_space()
+
+    def get_jp_co(self):
+        jps_list = list(map(self.obj_get_position, self.jps))
+        return np.array(jps_list).flatten()
+
+    @staticmethod
+    def valid_pos(config):
+        if config[2]<-5*pi/6 or config[2]>0 or config[1]+config[2]>0:
+            return False
+        tippos = tipcoor(config)[-1]
+        if tippos<0.334:
+            return False
+
+        return True
+
+    def reset(self):
+        if self.sim_running:
+            self.stop_simulation()
+        while self.sim_running:
+            self.stop_simulation()
+
+        if self.episode%1==0:
+            init_w = [0.1, 0.1, 0.1, 0.2, 0.2]
+            init_joint_pos = np.array([0, 0, -3 * pi / 4, 0, pi / 2])
+            target_joint_pos = np.array([0, - pi / 3, - pi / 4, 0, pi / 2])
+            init_joint_pos = init_joint_pos + np.multiply(init_w, 0.5 * np.random.randn(5))
+            target_joint_pos = target_joint_pos + np.multiply(init_w, 0.8 * np.random.randn(5))
+            self.start_simulation()
+            time1 = time.time()
+            while not self.valid_pos(init_joint_pos):
+                init_joint_pos[2] += 0.5*init_w[2]*np.random.randn()
+                if time.time()-time1>5:
+                    return None
+            time2 = time.time()
+            while not self.valid_pos(target_joint_pos):
+                target_joint_pos[2] += 0.8*init_w[2]*np.random.randn()
+                if time.time()-time2>5:
+                    return None
+            self.set_joints(target_joint_pos)
+            self.init_joint_pos = init_joint_pos
+            self.target_joint_pos = target_joint_pos
+            self.init_goal_dis = self._angle_dis(init_joint_pos, target_joint_pos, 5)
+            self.reset_obstacle()
+            self.tip_pos = self.obj_get_position(self.tip)
+            self.tip_ori = self.obj_get_orientation(self.tip)
+
+            while self._clear_obs_col():
+                self.reset_obstacle()
+        else:
+            self.start_simulation()
+            self.obj_set_position(self.obstacle, self.obstacle_pos)
+            self.set_joints(self.target_joint_pos)
+            self.tip_pos = self.obj_get_position(self.tip)
+            self.tip_ori = self.obj_get_orientation(self.tip)
+
+        self.obj_set_position(self.goal_viz, self.tip_pos)
+        self.obj_set_orientation(self.goal_viz, self.tip_ori)
+        self.set_joints(self.init_joint_pos)
+        self.step_simulation()
+        ob = self._make_observation()
+        self.last_dis = self.distance
+        self.pre_config = self._config()
+        return ob
+
+    def reset_obstacle(self):
+        init_tip = tipcoor(np.concatenate((self.init_joint_pos, np.zeros(5-self.dof))))[-3:-1]
+        goal_tip = tipcoor(np.concatenate((self.target_joint_pos, np.zeros(5-self.dof))))[-3:-1]
+        alpha = 0.4 + 0.2 * np.random.randn()
+        obs_pos = alpha*init_tip + (1-alpha)*goal_tip
+        obs_pos += 0.06*np.random.randn(2)
+        obs_pos[0] += 0.0*np.random.rand()
+
+        self.obstacle_pos = np.clip(obs_pos, self.observation_space.low[10:12],
+                                    self.observation_space.high[10:12])
+
+    def _make_obs_space(self):
+        joint_lbound = np.array([-2 * pi / 3, -pi / 2, -pi, -pi / 2, 0])
+        joint_hbound = np.array([2 * pi / 3, pi / 6, 0, pi / 2, pi])
+        obstacle_pos_lbound = np.array([-2, -2])
+        obstalce_pos_hbound = np.array([2, 2])
+        pos_lbound = np.array([-1.2, -1.2, -0.2] * 6)
+        pos_hbound = np.array([1.2, 1.2, 1.3] * 6)
+        self.observation_space = gym.spaces.Box(low=np.concatenate([joint_lbound, joint_lbound, obstacle_pos_lbound, pos_lbound]),
+                                                high=np.concatenate([joint_hbound, joint_hbound, obstalce_pos_hbound, pos_hbound]))
+
+    def _make_observation(self):
+        """Get observation from v-rep and stores in self.observation
+        """
+        joint_angles = [self.obj_get_joint_angle(joint) for joint in self.oh_joint]
+        self.distance = self.read_distance(self.distance_handle)
+        self.tip_pos = self.obj_get_position(self.tip)
+        ps = tipcoor2(joint_angles)
+        jps_pos = self.get_jp_co()
+        self.observation = np.concatenate([np.array(joint_angles).astype('float32'),
+                                           self.target_joint_pos,
+                                           self.obstacle_pos,
+                                           jps_pos, np.array(self.tip_pos)
+                                           #np.array([self.distance])
+                                           ])
+        if self.enable_cameras:
+            img1 = self.obj_get_vision_image(self.camera1)
+            img2 = self.obj_get_vision_image(self.camera2)
+            img3 = self.obj_get_vision_image(self.camera3)
+            self.img1 = np.flip(img1, 2)
+            self.img2 = np.flip(img2, 2)
+            self.img3 = np.flip(img3, 2)
+        return self.observation
+
+    def _clear_obs_col(self):
+        self.step_simulation()
+        self.obj_set_position(self.obstacle, np.concatenate((self.obstacle_pos, np.array([0.534]))))
+        self.obj_set_orientation(self.obstacle, np.zeros(3))
+        col1 = self._check_collision(self.target_joint_pos, self.collision_handle)
+        init_tip_obs_dis = np.linalg.norm(self.obj_get_position(self.tip)[:2]-self.obstacle_pos)
+        col2 = self._check_collision(self.init_joint_pos, self.collision_handle)
+        target_tip_obs_dis = np.linalg.norm(self.obj_get_position(self.tip)[:2] - self.obstacle_pos)
+        return col1 or col2 or min(init_tip_obs_dis, target_tip_obs_dis)<0.08
+
+    def step(self, ac):
+        # self._make_observation()
+        #ac = self._action_process(ac)
+        ac = np.clip(ac, self.action_space.low, self.action_space.high)
+        invalid = not self._make_action(ac)
+        self.step_simulation()
+        self._make_observation()
+        self.collision_check = self.read_collision(self.collision_handle) or self._config()[2]<-2.79
+
+        cfg = self._config()
+        angle_dis_thresh = self.l2_thresh*1.1
+        done = self._angle_dis(cfg, self.target_joint_pos, self.dof) < angle_dis_thresh or self.collision_check or invalid
+        reward = self.compute_reward(cfg, ac)
+        info = {}
+        if self._angle_dis(cfg, self.target_joint_pos, self.dof) < angle_dis_thresh:
+            info["status"] = 'reach'
+        elif done:
+            info["status"] = 'collide'
+        else:
+            info["status"] = 'running'
+        self.pre_config = cfg
+        return self.observation, reward, done, info
+
+    def compute_reward(self, state, action):
+        config_dis = self._angle_dis(state, self.target_joint_pos, 5)
+        epsilon = 0.001
+        obs_dis_incre = self.distance - self.last_dis
+        tip_dis_incre = self._tip_dis(self.pre_config) - self._tip_dis(state)
+        if tip_dis_incre > epsilon:  # tip is approaching target
+            if obs_dis_incre < -epsilon:  # approaching obstacle
+                approaching = 0.01
+            else:
+                approaching = 0.03
+        elif tip_dis_incre < -epsilon:  # tip is away from target
+            if obs_dis_incre < -epsilon:  # approaching obstacle
+                approaching = -0.1
+            elif self.distance > 0.15:
+                approaching = -0.1
+            else:
+                approaching = -0.02
+            if tip_dis_incre < -0.1:
+                approaching *= 2
+            if self._tip_dis(state) < 0.2:
+                approaching *= 2
+        else:
+            approaching = 0
+        # pre_config_dis = self._angle_dis(state-action, self.target_joint_pos, 5)
+        if config_dis < 1.1*self.l2_thresh:
+            reach = 2
+        elif config_dis < 3 * self.l2_thresh:
+            reach = 0.05
+        else:
+            reach = 0
+        collision = -2 if self.collision_check else 0
+        danger = -0.01 if self.distance < 1e-2 else 0
+        valid = self.valid_pos(state)
+        return reach + collision + valid-1 + approaching + danger
 
 
 def main():
